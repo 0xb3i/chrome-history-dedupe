@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Deduped History Search</title>
+    <link rel="stylesheet" href="src/styles.css">
+  </head>
+  <body class="page-body">
+    <main class="shell">
+      <header class="topbar">
+        <div class="brand">
+          <h1>历史记录</h1>
+        </div>
+        <button class="shortcut-link" id="shortcut-settings" type="button">快捷键</button>
+      </header>
+
+      <form class="controls" id="search-form">
+        <label class="field field-wide">
+          <span class="visually-hidden">搜索历史记录</span>
+          <input id="query" type="search" placeholder="搜索历史记录" autocomplete="off" autofocus>
+        </label>
+
+        <label class="field">
+          <span>范围</span>
+          <select id="range">
+            <option value="day">24 小时</option>
+            <option value="week">7 天</option>
+            <option value="month" selected>30 天</option>
+            <option value="quarter">90 天</option>
+            <option value="all">全部</option>
+          </select>
+        </label>
+
+        <button class="primary-button" type="submit">搜索</button>
+      </form>
+
+      <div class="status-line">
+        <span id="status-pill">待搜索</span>
+      </div>
+
+      <section class="summary" id="summary" aria-live="polite"></section>
+      <ol class="results" id="results"></ol>
+      <section class="empty-state" id="empty-state">输入关键词或直接搜索最近历史。</section>
+    </main>
+
+    <script type="module" src="src/history-page.js"></script>
+  </body>
+</html>

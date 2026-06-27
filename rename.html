@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>修改网页名</title>
+    <link rel="stylesheet" href="src/styles.css">
+  </head>
+  <body class="rename-body">
+    <main class="rename-panel">
+      <header class="rename-header">
+        <h1>修改网页名</h1>
+      </header>
+
+      <form id="rename-form" class="rename-form">
+        <label class="field">
+          <span>网页名</span>
+          <input id="rename-title" type="text" autocomplete="off" autofocus>
+        </label>
+
+        <div class="rename-actions">
+          <button id="restore-button" class="secondary-button" type="button">还原原名</button>
+          <button id="cancel-button" class="secondary-button" type="button">取消</button>
+          <button class="primary-button" type="submit">保存</button>
+        </div>
+      </form>
+
+      <p id="rename-status" class="rename-status" role="status"></p>
+    </main>
+
+    <script type="module" src="src/rename-page.js"></script>
+  </body>
+</html>

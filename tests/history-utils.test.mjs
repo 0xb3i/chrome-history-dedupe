@@ -1,0 +1,620 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import {
+  applyPinnedStateToGroups,
+  applyTitleOverridesToItems,
+  dedupeHistoryItems,
+  filterHistoryItemsByQuery,
+  formatHistoryUrlForGroup,
+  getHistoryItemPinKey,
+  getHistoryItemTitleOverrideKey,
+  groupHistoryItems,
+  normalizeHistoryKey
+} from '../src/history-utils.js';
+
+test('normalized URL mode collapses repeat visits and keeps the latest item', () => {
+  const older = {
+    id: 'older',
+    title: 'Older A',
+    url: 'https://Example.com/a/?utm_source=newsletter&b=2#section',
+    lastVisitTime: 100,
+    visitCount: 1
+  };
+  const newer = {
+    id: 'newer',
+    title: 'Newer A',
+    url: 'https://example.com/a?b=2&utm_campaign=spring',
+    lastVisitTime: 200,
+    visitCount: 3
+  };
+
+  const [result] = dedupeHistoryItems([older, newer], 'normalized-url');
+
+  assert.equal(result.id, 'newer');
+  assert.equal(result.dedupeCount, 2);
+  assert.equal(result.dedupeKey, 'https://example.com/a?b=2');
+});
+
+test('normalized URL mode strips common tracking parameters but preserves meaningful parameters', () => {
+  const key = normalizeHistoryKey(
+    {
+      url: 'https://example.com/search?q=chrome&utm_medium=email&fbclid=abc&sort=recent'
+    },
+    'normalized-url'
+  );
+
+  assert.equal(key, 'https://example.com/search?q=chrome&sort=recent');
+});
+
+test('exact URL mode does not collapse query parameter variants', () => {
+  const results = dedupeHistoryItems(
+    [
+      { id: 'a', url: 'https://example.com/a?x=1', lastVisitTime: 100 },
+      { id: 'b', url: 'https://example.com/a?x=2', lastVisitTime: 200 }
+    ],
+    'exact-url'
+  );
+
+  assert.deepEqual(
+    results.map((item) => item.id),
+    ['b', 'a']
+  );
+});
+
+test('domain mode collapses all pages from the same hostname', () => {
+  const [result] = dedupeHistoryItems(
+    [
+      { id: 'home', url: 'https://example.com/', lastVisitTime: 100 },
+      { id: 'docs', url: 'https://example.com/docs', lastVisitTime: 300 },
+      { id: 'blog', url: 'https://EXAMPLE.com/blog', lastVisitTime: 200 }
+    ],
+    'domain'
+  );
+
+  assert.equal(result.id, 'docs');
+  assert.equal(result.dedupeCount, 3);
+  assert.equal(result.dedupeKey, 'example.com');
+});
+
+test('invalid URLs fall back to their raw URL string', () => {
+  const key = normalizeHistoryKey({ url: 'not a valid url' }, 'normalized-url');
+
+  assert.equal(key, 'not a valid url');
+});
+
+test('page title mode collapses different URLs with the same title and keeps the highest visit count', () => {
+  const results = dedupeHistoryItems(
+    [
+      {
+        id: 'older-high-count',
+        title: 'MCP Inspector',
+        url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa/inspector',
+        lastVisitTime: 200,
+        visitCount: 12
+      },
+      {
+        id: 'newer-low-count',
+        title: 'MCP Inspector',
+        url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa/tools',
+        lastVisitTime: 400,
+        visitCount: 3
+      }
+    ],
+    'page-title'
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, 'older-high-count');
+  assert.equal(results[0].dedupeKey, 'mcp inspector');
+  assert.equal(results[0].dedupeCount, 2);
+  assert.equal(results[0].totalVisitCount, 15);
+});
+
+test('page title mode falls back to normalized URL when title is empty', () => {
+  const results = dedupeHistoryItems(
+    [
+      {
+        id: 'older-empty-title',
+        title: '',
+        url: 'https://example.com/a/?utm_source=test',
+        lastVisitTime: 100,
+        visitCount: 1
+      },
+      {
+        id: 'newer-empty-title',
+        title: '',
+        url: 'https://example.com/a',
+        lastVisitTime: 300,
+        visitCount: 2
+      }
+    ],
+    'page-title'
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, 'newer-empty-title');
+  assert.equal(results[0].dedupeKey, 'https://example.com/a');
+});
+
+test('page title mode ignores zero-width characters in titles', () => {
+  const results = dedupeHistoryItems(
+    [
+      {
+        id: 'plain-title',
+        title: '联盟搜索 & Agent 周报 20260603 - 20260609 - 飞书云文档',
+        url: 'https://bytedance.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb?open_in_browser=true',
+        lastVisitTime: 100,
+        visitCount: 4
+      },
+      {
+        id: 'zero-width-title',
+        title:
+          '\u200c\u2064\u2062\u200b\u200c\u2061\u200c\u200b\u2063\u2063\u200d\u2061\u2061\u200d\u200d\u2061\u2064\u2062\u200d\u2061联盟搜索 & Agent 周报 20260603 - 20260609 - 飞书云文档',
+        url: 'https://bytedance.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb?open_in_browser=true&create_from=create_doc_to_wiki',
+        lastVisitTime: 300,
+        visitCount: 6
+      }
+    ],
+    'page-title'
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, 'zero-width-title');
+  assert.equal(
+    results[0].dedupeKey,
+    '联盟搜索 & agent 周报 20260603 - 20260609 - 飞书云文档'
+  );
+});
+
+test('minimal service mode merges tab-like pages under the same resource id', () => {
+  const results = dedupeHistoryItems(
+    [
+      {
+        id: 'tools',
+        title: 'MCP Server Tools',
+        url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/rd2nw9df/tools',
+        lastVisitTime: 200,
+        visitCount: 2
+      },
+      {
+        id: 'inspector',
+        title: 'MCP Server Inspector',
+        url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/rd2nw9df/inspector',
+        lastVisitTime: 100,
+        visitCount: 1
+      }
+    ],
+    'minimal-service'
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(
+    results[0].dedupeKey,
+    'https://cloud-ttp-us.bytedance.net/tae/mcp_server/rd2nw9df'
+  );
+  assert.equal(results[0].dedupeCount, 2);
+  assert.equal(results[0].totalVisitCount, 3);
+});
+
+test('minimal service mode prefers a renamed item within a merged service bucket', () => {
+  const results = dedupeHistoryItems(
+    [
+      {
+        id: 'popular-tools',
+        title: 'MCP Server Tools',
+        url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/rd2nw9df/tools',
+        lastVisitTime: 300,
+        visitCount: 20,
+        isTitleRenamed: false
+      },
+      {
+        id: 'renamed-inspector',
+        title: '核心 MCP 服务',
+        url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/rd2nw9df/inspector',
+        lastVisitTime: 100,
+        visitCount: 1,
+        isTitleRenamed: true
+      }
+    ],
+    'minimal-service'
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, 'renamed-inspector');
+  assert.equal(results[0].title, '核心 MCP 服务');
+  assert.equal(results[0].totalVisitCount, 21);
+});
+
+test('minimal service mode keeps ordinary query variants distinct when no resource id is visible', () => {
+  const results = dedupeHistoryItems(
+    [
+      {
+        id: 'search-a',
+        title: 'Search A',
+        url: 'https://example.com/search?q=alpha',
+        lastVisitTime: 200,
+        visitCount: 1
+      },
+      {
+        id: 'search-b',
+        title: 'Search B',
+        url: 'https://example.com/search?q=beta',
+        lastVisitTime: 100,
+        visitCount: 1
+      }
+    ],
+    'minimal-service'
+  );
+
+  assert.equal(results.length, 2);
+});
+
+test('minimal service mode keeps root resource query URLs valid', () => {
+  const key = normalizeHistoryKey(
+    {
+      url: 'https://example.com/?id=123&utm_source=mail'
+    },
+    'minimal-service'
+  );
+
+  assert.equal(key, 'https://example.com/?id=123');
+});
+
+test('minimal service mode does not merge tab-like paths without a resource id', () => {
+  const results = dedupeHistoryItems(
+    [
+      {
+        id: 'project-tools',
+        title: 'Project Tools',
+        url: 'https://example.com/project/acme/tools',
+        lastVisitTime: 200,
+        visitCount: 1
+      },
+      {
+        id: 'project-inspector',
+        title: 'Project Inspector',
+        url: 'https://example.com/project/acme/inspector',
+        lastVisitTime: 100,
+        visitCount: 1
+      }
+    ],
+    'minimal-service'
+  );
+
+  assert.equal(results.length, 2);
+});
+
+test('domain grouping puts different paths from the same host in one group', () => {
+  const groups = groupHistoryItems([
+    {
+      id: 'tools',
+      url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa/tools',
+      lastVisitTime: 300
+    },
+    {
+      id: 'inspector',
+      url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa/inspector',
+      lastVisitTime: 200
+    },
+    {
+      id: 'other',
+      url: 'https://example.com/a',
+      lastVisitTime: 100
+    }
+  ]);
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].key, 'cloud-ttp-us.bytedance.net');
+  assert.deepEqual(
+    groups[0].items.map((item) => item.id),
+    ['tools', 'inspector']
+  );
+});
+
+test('domain groups sort by the sum of visit counts across the group', () => {
+  const groups = groupHistoryItems([
+    { id: 'older-a', url: 'https://a.example/one', lastVisitTime: 100, visitCount: 9 },
+    { id: 'newer-b', url: 'https://b.example/two', lastVisitTime: 500, visitCount: 2 },
+    { id: 'older-b', url: 'https://b.example/one', lastVisitTime: 200, visitCount: 1 }
+  ]);
+
+  assert.deepEqual(
+    groups.map((group) => group.key),
+    ['a.example', 'b.example']
+  );
+  assert.equal(groups[0].totalVisitCount, 9);
+  assert.equal(groups[1].totalVisitCount, 3);
+});
+
+test('domain groups prefer item totalVisitCount when summing group frequency', () => {
+  const groups = groupHistoryItems([
+    {
+      id: 'a-one',
+      url: 'https://a.example/one',
+      lastVisitTime: 100,
+      visitCount: 2,
+      totalVisitCount: 7
+    },
+    {
+      id: 'b-one',
+      url: 'https://b.example/one',
+      lastVisitTime: 400,
+      visitCount: 5,
+      totalVisitCount: 5
+    }
+  ]);
+
+  assert.deepEqual(
+    groups.map((group) => group.key),
+    ['a.example', 'b.example']
+  );
+  assert.equal(groups[0].totalVisitCount, 7);
+});
+
+test('local file URLs use a visible stable group instead of an empty hostname', () => {
+  const groups = groupHistoryItems([
+    {
+      id: 'local-file',
+      title: 'ENFJ 主人公型人格深度解析',
+      url: 'file:///Users/bytedance/Library/Application%20Support/TRAE%20SOLO%20CN/report.html',
+      lastVisitTime: 100,
+      visitCount: 2
+    }
+  ]);
+
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].key, '本地文件');
+  assert.equal(groups[0].label, '本地文件');
+});
+
+test('grouped URL display omits the repeated domain and keeps distinguishing suffixes', () => {
+  assert.equal(
+    formatHistoryUrlForGroup(
+      {
+        url: 'https://meego.larkoffice.com/data_ecom/story/detail/7306503596?openScene=4#comments'
+      },
+      'meego.larkoffice.com'
+    ),
+    '/data_ecom/story/detail/7306503596?openScene=4#comments'
+  );
+
+  assert.equal(
+    formatHistoryUrlForGroup({ url: 'http://localhost:5173/history.html?range=week' }, 'localhost'),
+    ':5173/history.html?range=week'
+  );
+});
+
+test('grouped local file display shows a decoded filesystem path', () => {
+  assert.equal(
+    formatHistoryUrlForGroup(
+      {
+        url: 'file:///Users/bytedance/Library/Application%20Support/TRAE%20SOLO%20CN/report.html'
+      },
+      '本地文件'
+    ),
+    '/Users/bytedance/Library/Application Support/TRAE SOLO CN/report.html'
+  );
+
+  assert.equal(
+    formatHistoryUrlForGroup({ url: 'file:///Users/bytedance/My%20Report.html' }),
+    '/Users/bytedance/My Report.html'
+  );
+});
+
+test('grouped URL display falls back to the original URL outside matching domain groups', () => {
+  assert.equal(
+    formatHistoryUrlForGroup({ url: 'https://example.com/docs' }, 'other.example.com'),
+    'https://example.com/docs'
+  );
+  assert.equal(formatHistoryUrlForGroup({ url: 'not a valid url' }, 'example.com'), 'not a valid url');
+});
+
+test('pin keys normalize URLs so tracking variants share the same pin', () => {
+  const key = getHistoryItemPinKey({
+    url: 'https://example.com/docs/?utm_source=mail&b=2#section'
+  });
+
+  assert.equal(key, 'https://example.com/docs?b=2');
+});
+
+test('title override keys normalize URLs so tracking variants share one custom title', () => {
+  const key = getHistoryItemTitleOverrideKey({
+    url: 'https://example.com/docs/?utm_source=mail&b=2#section'
+  });
+
+  assert.equal(key, 'https://example.com/docs?b=2');
+});
+
+test('title overrides are applied before page-title dedupe', () => {
+  const rawItems = [
+    {
+      id: 'docs',
+      title: 'Docs',
+      url: 'https://example.com/docs?utm_source=mail',
+      lastVisitTime: 100,
+      visitCount: 1
+    },
+    {
+      id: 'guide',
+      title: 'Guide',
+      url: 'https://example.com/guide',
+      lastVisitTime: 200,
+      visitCount: 2
+    }
+  ];
+  const renamedItems = applyTitleOverridesToItems(
+    rawItems,
+    new Map([['https://example.com/docs', 'Guide']])
+  );
+  const [result] = dedupeHistoryItems(renamedItems, 'page-title');
+
+  assert.equal(result.dedupeKey, 'guide');
+  assert.equal(result.dedupeCount, 2);
+  assert.equal(result.totalVisitCount, 3);
+});
+
+test('page title dedupe keeps all title override keys for batch renaming', () => {
+  const [result] = dedupeHistoryItems(
+    applyTitleOverridesToItems([
+      {
+        id: 'docs-a',
+        title: 'Docs',
+        url: 'https://example.com/docs/a',
+        lastVisitTime: 100,
+        visitCount: 1
+      },
+      {
+        id: 'docs-b',
+        title: 'Docs',
+        url: 'https://example.com/docs/b',
+        lastVisitTime: 200,
+        visitCount: 2
+      }
+    ]),
+    'page-title'
+  );
+
+  assert.deepEqual(result.titleOverrideKeys, [
+    'https://example.com/docs/a',
+    'https://example.com/docs/b'
+  ]);
+});
+
+test('query filtering searches effective renamed titles and URLs', () => {
+  const rawItems = [
+    {
+      id: 'renamed',
+      title: 'Original Title',
+      url: 'https://example.com/a',
+      lastVisitTime: 100
+    },
+    {
+      id: 'plain',
+      title: 'Plain Docs',
+      url: 'https://docs.example.com/guide',
+      lastVisitTime: 200
+    }
+  ];
+  const renamedItems = applyTitleOverridesToItems(
+    rawItems,
+    new Map([['https://example.com/a', 'Project Atlas']])
+  );
+
+  assert.deepEqual(
+    filterHistoryItemsByQuery(renamedItems, 'atlas').map((item) => item.id),
+    ['renamed']
+  );
+  assert.deepEqual(
+    filterHistoryItemsByQuery(renamedItems, 'docs.example.com').map((item) => item.id),
+    ['plain']
+  );
+  assert.deepEqual(
+    filterHistoryItemsByQuery(renamedItems, 'Original Title').map((item) => item.id),
+    []
+  );
+});
+
+test('pinned pages move to the top of their group and support multiple pins', () => {
+  const groups = groupHistoryItems([
+    { id: 'newest', url: 'https://example.com/newest', lastVisitTime: 500 },
+    { id: 'pinned-older', url: 'https://example.com/pinned-older', lastVisitTime: 100 },
+    { id: 'middle', url: 'https://example.com/middle', lastVisitTime: 300 },
+    { id: 'pinned-newer', url: 'https://example.com/pinned-newer', lastVisitTime: 200 }
+  ]);
+
+  const pinnedGroups = applyPinnedStateToGroups(groups, [
+    'https://example.com/pinned-older',
+    'https://example.com/pinned-newer'
+  ]);
+
+  assert.deepEqual(
+    pinnedGroups[0].items.map((item) => item.id),
+    ['pinned-older', 'pinned-newer', 'newest', 'middle']
+  );
+  assert.deepEqual(
+    pinnedGroups[0].items.map((item) => item.isPinned),
+    [true, true, false, false]
+  );
+  assert.equal(pinnedGroups[0].pinnedCount, 2);
+});
+
+test('pinned pages follow the order they were pinned instead of visit time or URL', () => {
+  const groups = groupHistoryItems([
+    { id: 'alpha-newest', url: 'https://example.com/alpha', lastVisitTime: 500 },
+    { id: 'beta-oldest', url: 'https://example.com/beta', lastVisitTime: 100 },
+    { id: 'gamma-middle', url: 'https://example.com/gamma', lastVisitTime: 300 }
+  ]);
+
+  const pinnedGroups = applyPinnedStateToGroups(groups, [
+    'https://example.com/beta',
+    'https://example.com/gamma',
+    'https://example.com/alpha'
+  ]);
+
+  assert.deepEqual(
+    pinnedGroups[0].items.map((item) => item.id),
+    ['beta-oldest', 'gamma-middle', 'alpha-newest']
+  );
+});
+
+test('renamed pages sort after pinned pages and before natural group order', () => {
+  const groups = groupHistoryItems(
+    applyTitleOverridesToItems(
+      [
+        {
+          id: 'newest-plain',
+          title: 'Newest Plain',
+          url: 'https://example.com/newest-plain',
+          lastVisitTime: 500
+        },
+        {
+          id: 'oldest-renamed',
+          title: 'Oldest Renamed',
+          url: 'https://example.com/oldest-renamed',
+          lastVisitTime: 100
+        },
+        {
+          id: 'middle-pinned',
+          title: 'Middle Pinned',
+          url: 'https://example.com/middle-pinned',
+          lastVisitTime: 300
+        },
+        {
+          id: 'middle-plain',
+          title: 'Middle Plain',
+          url: 'https://example.com/middle-plain',
+          lastVisitTime: 250
+        }
+      ],
+      new Map([['https://example.com/oldest-renamed', 'Custom Oldest']])
+    )
+  );
+
+  const sortedGroups = applyPinnedStateToGroups(groups, ['https://example.com/middle-pinned']);
+
+  assert.deepEqual(
+    sortedGroups[0].items.map((item) => item.id),
+    ['middle-pinned', 'oldest-renamed', 'newest-plain', 'middle-plain']
+  );
+});
+
+test('unpinned pages return to the original group sort order', () => {
+  const groups = groupHistoryItems([
+    { id: 'newest', url: 'https://example.com/newest', lastVisitTime: 500 },
+    { id: 'pinned-older', url: 'https://example.com/pinned-older', lastVisitTime: 100 },
+    { id: 'middle', url: 'https://example.com/middle', lastVisitTime: 300 }
+  ]);
+
+  const unpinnedGroups = applyPinnedStateToGroups(groups, new Set());
+
+  assert.deepEqual(
+    unpinnedGroups[0].items.map((item) => item.id),
+    ['newest', 'middle', 'pinned-older']
+  );
+  assert.deepEqual(
+    unpinnedGroups[0].items.map((item) => item.isPinned),
+    [false, false, false]
+  );
+  assert.equal(unpinnedGroups[0].pinnedCount, 0);
+});
