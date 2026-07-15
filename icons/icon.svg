@@ -1,10 +1,28 @@
 <svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- Ant Design style: solid brand-blue squircle with a white glyph -->
-  <rect width="128" height="128" rx="30" fill="#1677ff"/>
-
-  <!-- counter-clockwise rewind ring with an L-shape arrow tail -->
-  <g transform="translate(64 64) scale(0.66) translate(-64 -64)" stroke="#fff" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M 16 64 a 48 48 0 1 0 14.06 -33.94 L 16 44.12"/>
-    <path d="M 16 16 v 28.12 h 28.12"/>
-  </g>
+  <path
+    d="M24 28H88C95.7 28 102 34.3 102 42V88C102 95.7 95.7 102 88 102H24C16.3 102 10 95.7 10 88V42C10 34.3 16.3 28 24 28Z"
+    stroke="#1677ff"
+    stroke-width="10"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M40 12H104C111.7 12 118 18.3 118 26V74"
+    stroke="#1677ff"
+    stroke-width="10"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M38 66H76"
+    stroke="#1677ff"
+    stroke-width="10"
+    stroke-linecap="round"
+  />
+  <path
+    d="M68 50L84 66L68 82"
+    stroke="#1677ff"
+    stroke-width="10"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
 </svg>

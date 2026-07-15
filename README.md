@@ -21,15 +21,19 @@ When Chrome is in macOS fullscreen, the rename shortcut opens an inline dialog o
 
 ## Behavior
 
-The extension always dedupes by page title first. If a page has no usable title, it falls back to normalized URL dedupe. For scoped ranges such as 7 days or 30 days, visit counts are counted inside the selected time window before sorting and deduping. When multiple history items share the same title, the visible result keeps the entry with the highest windowed `visitCount`; ties fall back to the most recent visit.
+The extension dedupes tab-like pages only when both their original page titles and stable resource identities match. A resource identity is derived from an ID-shaped path segment or resource-ID query parameter; when no reliable identity exists, the extension falls back to normalized URL dedupe. Custom names affect display and search but never page identity. For scoped ranges such as 7 days or 30 days, visit counts are counted inside the selected time window before sorting and deduping.
 
-Use the `极简` metric button to additionally merge pages under the same detected service resource ID. For example, `/tae/mcp_server/rd2nw9df/tools` and `/tae/mcp_server/rd2nw9df/inspector` collapse into one result keyed by `/tae/mcp_server/rd2nw9df`. Paths without a clear resource ID are left distinct. If one page in a merged bucket has a custom name, the renamed page is kept as the visible result.
+Use the `极简` metric button to hide result URLs for a more compact presentation. It does not change dedupe identity or merge additional pages.
 
 Search results are displayed as collapsible domain groups. For example, `https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa/tools` and `https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa/inspector` appear under the same `cloud-ttp-us.bytedance.net` group.
 
 Pages inside a domain group can be pinned. Multiple pages may be pinned at the same time, pinned pages stay at the top of their group in the order they were pinned, and unpinning returns them to the normal visit-time ordering.
 
-Use the pencil button next to any result to rename that page inside the extension. Custom names are applied before page-title dedupe, so renamed pages merge or split according to the edited title.
+Use the pencil button next to any result to rename that representative URL inside the extension. Renaming never propagates to other URLs in the same dedupe bucket. Version 0.1.5 removes duplicate custom-title records created by the older batch-rename behavior; affected pages need to be renamed once again.
+
+The background service worker also captures final titles from open tabs and stores the most recent 5,000 URL-title pairs locally. Chrome history titles are never used for display, search, sorting, or dedupe because they may be stale placeholders such as `Docs`. Search uses a manual rename first, then the captured live title; without either, the result displays its URL and only normalized-URL dedupe applies. Existing entries gain titles after their pages are opened again.
+
+The `刷新标题` action serially reloads all unique HTTP(S) URLs visited in the last seven days inside a temporary normal window that shares the current browser profile and SSO session. It captures stable titles, shows progress, and closes the window afterward. These reloads are recorded as new Chrome history visits.
 
 ## Local Data
 

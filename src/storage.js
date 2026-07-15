@@ -3,9 +3,13 @@ export const TITLE_OVERRIDES_STORAGE_KEY = 'deduped-history-title-overrides';
 export const GROUP_NAME_OVERRIDES_STORAGE_KEY = 'deduped-history-group-name-overrides';
 export const RENAME_DRAFTS_STORAGE_KEY = 'deduped-history-rename-drafts';
 export const LAST_SEARCH_STATE_STORAGE_KEY = 'deduped-history-last-search-state';
+export const TITLE_OVERRIDES_MIGRATION_STORAGE_KEY = 'deduped-history-title-overrides-migration';
+export const CAPTURED_PAGE_TITLES_STORAGE_KEY = 'deduped-history-captured-page-titles';
 
 const RENAME_DRAFT_TTL_MS = 15 * 60 * 1000;
+const MAX_CAPTURED_PAGE_TITLES = 5000;
 const SEARCH_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter', 'all']);
+const TITLE_OVERRIDES_MIGRATION_VERSION = 1;
 
 export async function loadPinnedUrlKeys() {
   const storedValue = await getStorageValue(PINNED_URLS_STORAGE_KEY, []);
@@ -18,7 +22,74 @@ export async function savePinnedUrlKeys(keys) {
 
 export async function loadTitleOverrides() {
   const storedValue = await getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {});
-  return normalizeTitleOverrideMap(storedValue);
+  const overrides = normalizeTitleOverrideMap(storedValue);
+  const migrationVersion = Number(
+    await getStorageValue(TITLE_OVERRIDES_MIGRATION_STORAGE_KEY, 0)
+  );
+
+  if (migrationVersion >= TITLE_OVERRIDES_MIGRATION_VERSION) {
+    return overrides;
+  }
+
+  const migratedOverrides = removeLegacyBatchTitleOverrides(overrides);
+  await setStorageValue(TITLE_OVERRIDES_STORAGE_KEY, Object.fromEntries(migratedOverrides));
+  await setStorageValue(
+    TITLE_OVERRIDES_MIGRATION_STORAGE_KEY,
+    TITLE_OVERRIDES_MIGRATION_VERSION
+  );
+  return migratedOverrides;
+}
+
+export async function loadCapturedPageTitles() {
+  const storedValue = await getStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, {});
+  return normalizeCapturedTitleMap(storedValue);
+}
+
+export async function saveCapturedPageTitle(key, title, updatedAt = Date.now()) {
+  const normalizedKey = normalizeStorageKey(key);
+  const normalizedTitle = normalizeTitle(title);
+  const normalizedUpdatedAt = Number(updatedAt);
+
+  if (!normalizedKey || !normalizedTitle || !Number.isFinite(normalizedUpdatedAt)) {
+    return;
+  }
+
+  const storedValue = await getStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, {});
+  const { records, changed } = updateCapturedTitleRecords(
+    storedValue,
+    normalizedKey,
+    normalizedTitle,
+    normalizedUpdatedAt
+  );
+
+  if (!changed) {
+    return;
+  }
+
+  const recentRecords = [...records]
+    .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
+    .slice(0, MAX_CAPTURED_PAGE_TITLES);
+  await setStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, Object.fromEntries(recentRecords));
+}
+
+export function updateCapturedTitleRecords(value, key, title, updatedAt) {
+  const records = normalizeCapturedTitleRecords(value);
+  const normalizedKey = normalizeStorageKey(key);
+  const normalizedTitle = normalizeTitle(title);
+  const normalizedUpdatedAt = Number(updatedAt);
+  const current = records.get(normalizedKey);
+
+  if (
+    !normalizedKey ||
+    !normalizedTitle ||
+    !Number.isFinite(normalizedUpdatedAt) ||
+    current?.title === normalizedTitle
+  ) {
+    return { records, changed: false };
+  }
+
+  records.set(normalizedKey, { title: normalizedTitle, updatedAt: normalizedUpdatedAt });
+  return { records, changed: true };
 }
 
 export async function loadGroupNameOverrides() {
@@ -143,6 +214,25 @@ export function normalizeTitleOverrideMap(value) {
   return overrides;
 }
 
+export function normalizeCapturedTitleMap(value) {
+  return new Map(
+    [...normalizeCapturedTitleRecords(value)].map(([key, record]) => [key, record.title])
+  );
+}
+
+export function removeLegacyBatchTitleOverrides(value) {
+  const overrides = normalizeTitleOverrideMap(value);
+  const titleCounts = new Map();
+
+  for (const title of overrides.values()) {
+    titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
+  }
+
+  return new Map(
+    [...overrides].filter(([, title]) => titleCounts.get(title) === 1)
+  );
+}
+
 export function normalizeLastSearchState(value) {
   const query = normalizeTitle(value?.query);
   const range = normalizeSearchRange(value?.range);
@@ -220,12 +310,33 @@ function normalizeRenameDraft(draft) {
   };
 }
 
+function normalizeCapturedTitleRecords(value) {
+  const entries = value instanceof Map ? [...value.entries()] : Object.entries(value ?? {});
+  const records = new Map();
+
+  for (const [key, record] of entries) {
+    const normalizedKey = normalizeStorageKey(key);
+    const normalizedTitle = normalizeTitle(record?.title);
+    const updatedAt = Number(record?.updatedAt);
+
+    if (normalizedKey && normalizedTitle && Number.isFinite(updatedAt)) {
+      records.set(normalizedKey, { title: normalizedTitle, updatedAt });
+    }
+  }
+
+  return records;
+}
+
 function normalizeStorageKey(value) {
   return String(value ?? '').trim();
 }
 
 function normalizeTitle(value) {
-  return String(value ?? '').trim().replace(/\s+/g, ' ');
+  return String(value ?? '')
+    .normalize('NFKC')
+    .replace(/\p{Cf}+/gu, '')
+    .trim()
+    .replace(/\s+/g, ' ');
 }
 
 function normalizeSearchRange(value) {

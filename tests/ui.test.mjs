@@ -18,17 +18,49 @@ test('history surfaces do not expose a dedupe mode selector', () => {
   }
 });
 
-test('history page script uses a fixed page title dedupe mode', () => {
+test('history page script dedupes by page title to collapse repeated named pages', () => {
   assert.equal(historyPageJs.includes("querySelector('#mode')"), false);
   assert.equal(historyPageJs.includes('modeSelect'), false);
   assert.equal(historyPageJs.includes("const DEDUPE_MODE = 'page-title';"), true);
-  assert.equal(historyPageJs.includes('dedupeHistoryItems(visibleItems, DEDUPE_MODE)'), true);
+  assert.equal(
+    historyPageJs.includes("dedupeHistoryItems(visibleItems, 'normalized-url')"),
+    true
+  );
+  assert.equal(historyPageJs.includes('dedupeHistoryItems(urlDedupedItems, DEDUPE_MODE)'), true);
 });
 
 test('history page filters queries locally after applying renamed titles', () => {
   assert.equal(historyPageJs.includes("text: '',"), true);
+  assert.equal(historyPageJs.includes('loadCapturedPageTitles'), true);
+  assert.equal(historyPageJs.includes('applyCapturedTitlesToItems'), true);
+  assert.equal(
+    historyPageJs.includes('applyCapturedTitlesToItems(itemsWithWindowVisitCounts, capturedPageTitles)'),
+    true
+  );
   assert.equal(historyPageJs.includes('filterHistoryItemsByQuery(renamedItems, query)'), true);
-  assert.equal(historyPageJs.includes('dedupeHistoryItems(visibleItems, DEDUPE_MODE)'), true);
+  assert.equal(historyPageJs.includes('dedupeHistoryItems(urlDedupedItems, DEDUPE_MODE)'), true);
+});
+
+test('only the latest asynchronous search may render results', () => {
+  assert.equal(historyPageJs.includes('let latestSearchRequestId = 0;'), true);
+  assert.equal(historyPageJs.includes('const searchRequestId = ++latestSearchRequestId;'), true);
+  assert.equal(historyPageJs.includes('if (searchRequestId !== latestSearchRequestId)'), true);
+  assert.equal(historyPageJs.includes('isLatestSearchRequest(searchRequestId)'), true);
+});
+
+test('typing does not trigger a search until the form is submitted', () => {
+  assert.equal(historyPageJs.includes('SEARCH_INPUT_DEBOUNCE_MS'), false);
+  assert.equal(historyPageJs.includes("queryInput.addEventListener('input'"), false);
+  assert.equal(historyPageJs.includes('scheduleSearchFromInput'), false);
+  assert.equal(historyPageJs.includes('clearScheduledInputSearch'), false);
+});
+
+test('background captures final tab titles for current and future tabs', () => {
+  assert.equal(backgroundJs.includes('chrome?.tabs?.onUpdated?.addListener'), true);
+  assert.equal(backgroundJs.includes('captureOpenTabTitles();'), true);
+  assert.equal(backgroundJs.includes('saveCapturedPageTitle'), true);
+  assert.equal(backgroundJs.includes('getHistoryItemCapturedTitleKey'), true);
+  assert.equal(backgroundJs.includes('changeInfo?.title'), true);
 });
 
 test('history page rewrites visit counts to the selected time window', () => {
@@ -92,6 +124,30 @@ test('bare result rows have dividers for scannable separation', () => {
   assert.equal(css.includes('padding: 13px 12px 11px;'), true);
 });
 
+test('grouped results keep rounded corners filled over page content', () => {
+  const css = readText('../src/styles.css');
+
+  assert.match(css, /\.results \{[\s\S]*?border-radius: var\(--radius\);/);
+  assert.match(css, /\.results \{[\s\S]*?background: var\(--surface\);/);
+  assert.match(css, /\.results \{[\s\S]*?overflow: hidden;/);
+  assert.match(css, /\.result-group \{[\s\S]*?background: var\(--surface\);/);
+  assert.match(css, /\.result-group \{[\s\S]*?overflow: hidden;/);
+  assert.match(css, /\.result-group:first-child \{[\s\S]*?border-top-left-radius: var\(--radius\);/);
+  assert.match(css, /\.result-group:first-child \{[\s\S]*?border-top-right-radius: var\(--radius\);/);
+  assert.match(css, /\.result-group:last-child \{[\s\S]*?border-bottom-left-radius: var\(--radius\);/);
+  assert.match(css, /\.result-group:last-child \{[\s\S]*?border-bottom-right-radius: var\(--radius\);/);
+});
+
+test('flat popup results clip row backgrounds inside the rounded border', () => {
+  const css = readText('../src/styles.css');
+
+  assert.match(css, /\.popup-results \{[^}]*overflow: hidden;/);
+  assert.match(css, /\.popup-results > \.result-item:first-child \{[^}]*border-top-left-radius: inherit;/);
+  assert.match(css, /\.popup-results > \.result-item:first-child \{[^}]*border-top-right-radius: inherit;/);
+  assert.match(css, /\.popup-results > \.result-item:last-child \{[^}]*border-bottom-left-radius: inherit;/);
+  assert.match(css, /\.popup-results > \.result-item:last-child \{[^}]*border-bottom-right-radius: inherit;/);
+});
+
 test('result metadata omits merge count and shortens dates for the current year', () => {
   assert.equal(historyPageJs.includes('合并 ${item.dedupeCount} 条'), false);
   assert.equal(historyPageJs.includes('currentYearDateFormatter'), true);
@@ -105,12 +161,12 @@ test('popup search controls stay on one row despite mobile media rules', () => {
   assert.equal(css.includes('width: 620px;'), true);
   assert.equal(css.includes('max-height: 760px;'), true);
   assert.equal(css.includes('max-height: none;'), true);
-  assert.equal(css.includes('overflow: visible;'), true);
   assert.equal(css.includes('grid-template-columns: minmax(260px, 520px) minmax(120px, 142px) auto;'), true);
   assert.equal(css.includes('justify-content: start;'), true);
   assert.equal(css.includes('.controls .field-wide'), true);
   assert.equal(css.includes('.popup-body .popup-controls'), true);
   assert.equal(css.includes('grid-template-columns: minmax(180px, 1fr) 96px auto;'), true);
+  assert.match(css, /\.popup-controls \{[\s\S]*?padding: 8px;/);
   assert.equal(css.includes('.popup-body .popup-controls .field-wide'), true);
   assert.equal(css.includes('.popup-body .popup-controls .primary-button'), true);
 });
@@ -123,6 +179,28 @@ test('range select uses a custom left-shifted chevron', () => {
   assert.equal(css.includes('background-image: url("data:image/svg+xml'), true);
   assert.equal(css.includes('background-position: calc(100% - 11px) 50%;'), true);
   assert.equal(css.includes('padding-right: 32px;'), true);
+});
+
+test('full history controls stack above later animated content while the range menu is open', () => {
+  const css = readText('../src/styles.css');
+
+  assert.match(css, /\.controls \{[^}]*position: relative;/);
+  assert.match(css, /\.controls \{[^}]*z-index: 30;/);
+});
+
+test('search clear control follows Ant-style flat allowClear affordance', () => {
+  const css = readText('../src/styles.css');
+
+  assert.equal(historyHtml.includes('input id="query" type="search"'), true);
+  assert.equal(popupHtml.includes('input id="query" type="search"'), true);
+  assert.equal(css.includes('.field input[type="search"]::-webkit-search-cancel-button'), true);
+  assert.match(css, /\.field input\[type="search"\] \{\s+padding-right: 11px;\s+\}/);
+  assert.equal(css.includes('-webkit-appearance: none;'), true);
+  assert.equal(css.includes('width: 14px;'), true);
+  assert.equal(css.includes('height: 14px;'), true);
+  assert.equal(css.includes('background: rgba(0, 0, 0, 0.25);'), true);
+  assert.equal(css.includes('background: rgba(0, 0, 0, 0.45);'), true);
+  assert.equal(css.includes("viewBox='64 64 896 896'"), true);
 });
 
 test('status count line is hidden because summary actions carry the controls', () => {
@@ -164,6 +242,14 @@ test('history search surfaces restore and remember the last search state', () =>
   assert.equal(historyPageJs.includes('rememberCurrentSearchState'), true);
 });
 
+test('popup selects the restored query when opened from the shortcut', () => {
+  assert.equal(popupHtml.includes('class="popup-body"'), true);
+  assert.equal(historyPageJs.includes('selectQueryInputOnPopupOpen();'), true);
+  assert.equal(historyPageJs.includes("document.body.classList.contains('popup-body')"), true);
+  assert.equal(historyPageJs.includes('queryInput.focus();'), true);
+  assert.equal(historyPageJs.includes('queryInput.select();'), true);
+});
+
 test('pin controls render as icon-only buttons with accessible labels', () => {
   const css = readText('../src/styles.css');
 
@@ -193,17 +279,24 @@ test('history results expose an icon-only rename control', () => {
   assert.equal(historyPageJs.includes("button.title = '修改网页名';"), true);
   assert.equal(historyPageJs.includes("button.setAttribute('aria-label', '修改网页名');"), true);
   assert.equal(historyPageJs.includes('saveTitleOverride'), true);
-  assert.equal(historyPageJs.includes('saveTitleOverridesForKeys'), true);
+  assert.equal(historyPageJs.includes('saveTitleOverride'), true);
+  assert.equal(historyPageJs.includes('saveTitleOverridesForKeys'), false);
   assert.equal(historyPageJs.includes('deleteTitleOverrides'), true);
   assert.equal(historyPageJs.includes('还原原名'), true);
   assert.equal(
-    historyPageJs.includes('applyTitleOverridesToItems(itemsWithWindowVisitCounts, titleOverrides)'),
+    historyPageJs.includes('applyTitleOverridesToItems(capturedTitleItems, titleOverrides)'),
     true
   );
   assert.equal(historyPageJs.includes('createRenameDialog'), true);
   assert.equal(historyPageJs.includes('globalThis.prompt'), false);
   assert.equal(css.includes('.item-action-button'), true);
   assert.equal(css.includes('.rename-dialog::backdrop'), true);
+});
+
+test('renaming a merged result only updates its representative URL', () => {
+  assert.equal(historyPageJs.includes('getRenameDialogTitleOverrideKey()'), true);
+  assert.equal(historyPageJs.includes('getRenameDialogTitleOverrideKeys()'), false);
+  assert.equal(historyPageJs.includes('deleteTitleOverrides([getRenameDialogTitleOverrideKey()])'), true);
 });
 
 test('renamed results carry no row-level decoration', () => {
@@ -229,12 +322,13 @@ test('rename summary metric toggles a renamed-pages filter', () => {
   assert.equal(css.includes('.metric-button[aria-pressed="true"]'), true);
 });
 
-test('minimal summary metric toggles service-level compaction', () => {
-  assert.equal(historyPageJs.includes("const MINIMAL_DEDUPE_MODE = 'minimal-service';"), true);
+test('minimal summary metric only changes presentation and never bypasses safe dedupe', () => {
+  assert.equal(historyPageJs.includes("const MINIMAL_DEDUPE_MODE = 'minimal-service';"), false);
   assert.equal(historyPageJs.includes('let showMinimalMode = false;'), true);
   assert.equal(historyPageJs.includes('createMinimalModeMetric'), true);
   assert.equal(historyPageJs.includes('showMinimalMode = !showMinimalMode;'), true);
-  assert.equal(historyPageJs.includes('dedupeHistoryItems(titleDedupedItems, MINIMAL_DEDUPE_MODE)'), true);
+  assert.equal(historyPageJs.includes('dedupeHistoryItems(titleDedupedItems, MINIMAL_DEDUPE_MODE)'), false);
+  assert.equal(historyPageJs.includes('const dedupedItems = titleDedupedItems;'), true);
   assert.equal(historyPageJs.includes('if (!showMinimalMode) {'), true);
   assert.equal(historyPageJs.includes("metricLabel.textContent = '极简';"), true);
   assert.equal(historyPageJs.includes("metricValue.textContent = showMinimalMode ? 'On' : 'Off';"), false);
@@ -250,6 +344,42 @@ test('summary exposes a collapse-all grouped-results action', () => {
   assert.equal(historyPageJs.includes('details.open = false;'), true);
 });
 
+test('summary exposes a seven-day live-title refresh with visible progress', () => {
+  assert.equal(historyPageJs.includes('createRefreshTitlesMetric'), true);
+  assert.equal(historyPageJs.includes('deduped-history:refresh-live-titles'), true);
+  assert.equal(historyPageJs.includes('deduped-history:title-refresh-progress'), true);
+  assert.equal(historyPageJs.includes("metricLabel.textContent = '刷新标题';"), true);
+  assert.equal(historyPageJs.includes('refreshTitleProgress.completed'), true);
+});
+
+test('background refreshes titles in a normal window that shares the current profile', () => {
+  assert.equal(backgroundJs.includes('isAllowedIncognitoAccess'), false);
+  assert.equal(backgroundJs.includes('incognito: true'), false);
+  assert.equal(backgroundJs.includes('incognito: false'), true);
+  assert.equal(backgroundJs.includes('getUniqueRefreshableHistoryUrls'), true);
+  assert.equal(backgroundJs.includes('chrome.history.search'), true);
+  assert.equal(backgroundJs.includes('saveCapturedPageTitle'), true);
+  assert.equal(backgroundJs.includes('deduped-history:title-refresh-progress'), true);
+  assert.equal(backgroundJs.includes('允许无痕模式'), false);
+});
+
+test('group toggles and result rows do not accidentally select text', () => {
+  const css = readText('../src/styles.css');
+
+  assert.match(css, /\.result-group-summary \{[\s\S]*?user-select: none;/);
+  assert.match(css, /\.result-item \{[\s\S]*?user-select: none;/);
+});
+
+test('long result titles clip before action buttons', () => {
+  const css = readText('../src/styles.css');
+
+  assert.match(css, /\.result-title \{[\s\S]*?display: block;/);
+  assert.match(css, /\.result-title \{[\s\S]*?max-width: 100%;/);
+  assert.match(css, /\.result-title \{[\s\S]*?overflow: hidden;/);
+  assert.match(css, /\.result-title \{[\s\S]*?text-overflow: ellipsis;/);
+  assert.match(css, /\.result-title \{[\s\S]*?white-space: nowrap;/);
+});
+
 test('renamed-pages filter renders bare result items without domain groups', () => {
   assert.equal(historyPageJs.includes('renderFlatResults'), true);
   assert.equal(historyPageJs.includes('currentGroups = showRenamedOnly ? [] : groupedItems;'), true);
@@ -260,9 +390,9 @@ test('renamed-pages filter renders bare result items without domain groups', () 
 });
 
 test('renamed-pages filter sorts bare results by display name', () => {
-  assert.equal(historyPageJs.includes("const nameCollator = new Intl.Collator('zh-CN'"), true);
+  assert.equal(historyPageJs.includes('compareDisplayNames,'), true);
   assert.equal(historyPageJs.includes('function sortItemsByDisplayName(items)'), true);
-  assert.equal(historyPageJs.includes('nameCollator.compare(getItemDisplayName(left), getItemDisplayName(right))'), true);
+  assert.equal(historyPageJs.includes('compareDisplayNames(getItemDisplayName(left), getItemDisplayName(right))'), true);
   assert.equal(historyPageJs.includes('function getItemDisplayName(item)'), true);
 });
 
@@ -280,7 +410,7 @@ test('domain groups can be renamed and restored', () => {
   assert.equal(historyPageJs.includes('restoreGroupOriginalName'), true);
   assert.equal(historyPageJs.includes('applyGroupNameOverridesToGroups'), true);
   assert.equal(historyPageJs.includes('Number(right.isGroupRenamed) - Number(left.isGroupRenamed)'), true);
-  assert.equal(historyPageJs.includes('nameCollator.compare(getGroupDisplayName(left), getGroupDisplayName(right))'), true);
+  assert.equal(historyPageJs.includes('compareDisplayNames(getGroupDisplayName(left), getGroupDisplayName(right))'), true);
   assert.equal(historyPageJs.includes('function getGroupDisplayName(group)'), true);
   assert.equal(historyPageJs.includes('left.originalIndex - right.originalIndex'), true);
 });

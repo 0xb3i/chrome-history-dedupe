@@ -1,6 +1,9 @@
 import {
   applyPinnedStateToGroups,
+  applyPinnedStateToItemsByName,
+  applyCapturedTitlesToItems,
   applyTitleOverridesToItems,
+  compareDisplayNames,
   dedupeHistoryItems,
   filterHistoryItemsByQuery,
   formatHistoryUrlForGroup,
@@ -9,28 +12,32 @@ import {
   groupHistoryItems
 } from './history-utils.js';
 import {
-  GROUP_NAME_OVERRIDES_STORAGE_KEY,
+  CAPTURED_PAGE_TITLES_STORAGE_KEY,
   deleteGroupNameOverride,
-  loadPinnedUrlKeys,
+  deleteTitleOverrides,
+  GROUP_NAME_OVERRIDES_STORAGE_KEY,
+  loadCapturedPageTitles,
   loadGroupNameOverrides,
   loadLastSearchState,
+  loadPinnedUrlKeys,
   loadTitleOverrides,
+  normalizeCapturedTitleMap,
   normalizeStringSet,
   normalizeTitleOverrideMap,
   PINNED_URLS_STORAGE_KEY,
-  deleteTitleOverrides,
   saveGroupNameOverride,
   saveLastSearchState,
   savePinnedUrlKeys,
-  saveTitleOverridesForKeys,
+  saveTitleOverride,
   TITLE_OVERRIDES_STORAGE_KEY
 } from './storage.js';
 
 const DEDUPE_MODE = 'page-title';
-const MINIMAL_DEDUPE_MODE = 'minimal-service';
 const MAX_RESULTS = 10000;
 const VISIT_COUNT_CONCURRENCY = 32;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const REFRESH_LIVE_TITLES_MESSAGE = 'deduped-history:refresh-live-titles';
+const TITLE_REFRESH_PROGRESS_MESSAGE = 'deduped-history:title-refresh-progress';
 
 const form = document.querySelector('#search-form');
 const queryInput = document.querySelector('#query');
@@ -42,16 +49,20 @@ const results = document.querySelector('#results');
 const emptyState = document.querySelector('#empty-state');
 const renameDialog = createRenameDialog();
 const groupRenameDialog = createGroupRenameDialog();
+let rangeDropdown = null;
 let currentGroups = [];
 let currentFlatItems = [];
 let pinnedUrlKeys = new Set();
 let groupNameOverrides = new Map();
 let titleOverrides = new Map();
+let capturedPageTitles = new Map();
 let isInitialized = false;
 let renameDialogItem = null;
 let groupRenameDialogGroup = null;
 let showRenamedOnly = false;
 let showMinimalMode = false;
+let latestSearchRequestId = 0;
+let refreshTitleProgress = null;
 
 const currentYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   month: 'long',
@@ -63,17 +74,21 @@ const otherYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium',
   timeStyle: 'short'
 });
-const nameCollator = new Intl.Collator('zh-CN', {
-  numeric: true,
-  sensitivity: 'base'
-});
-
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   runSearch();
 });
+setupRangeSelect();
 shortcutSettingsButton?.addEventListener('click', () => {
   globalThis.chrome?.tabs?.create?.({ url: 'chrome://extensions/shortcuts' });
+});
+globalThis.chrome?.runtime?.onMessage?.addListener((message) => {
+  if (message?.type !== TITLE_REFRESH_PROGRESS_MESSAGE) {
+    return;
+  }
+
+  refreshTitleProgress = message.progress;
+  renderSummary();
 });
 document.body.append(renameDialog.element);
 document.body.append(groupRenameDialog.element);
@@ -84,17 +99,20 @@ async function init() {
   setLoading();
 
   try {
-    const [loadedPinnedUrlKeys, loadedGroupNameOverrides, loadedTitleOverrides, lastSearchState] =
+    const [loadedPinnedUrlKeys, loadedGroupNameOverrides, loadedTitleOverrides, loadedCapturedPageTitles, lastSearchState] =
       await Promise.all([
         loadPinnedUrlKeys(),
         loadGroupNameOverrides(),
         loadTitleOverrides(),
+        loadCapturedPageTitles(),
         loadLastSearchState()
       ]);
     pinnedUrlKeys = loadedPinnedUrlKeys;
     groupNameOverrides = loadedGroupNameOverrides;
     titleOverrides = loadedTitleOverrides;
+    capturedPageTitles = loadedCapturedPageTitles;
     applyLastSearchState(lastSearchState);
+    selectQueryInputOnPopupOpen();
     isInitialized = true;
     addStorageChangeListener();
     await runSearch();
@@ -104,6 +122,7 @@ async function init() {
 }
 
 async function runSearch() {
+  const searchRequestId = ++latestSearchRequestId;
   const query = queryInput.value.trim();
 
   setLoading();
@@ -119,16 +138,20 @@ async function runSearch() {
       maxResults: MAX_RESULTS
     });
     const itemsWithWindowVisitCounts = await applyVisitCountsForWindow(rawItems, startTime, endTime);
-    const renamedItems = applyTitleOverridesToItems(itemsWithWindowVisitCounts, titleOverrides);
+    const capturedTitleItems = applyCapturedTitlesToItems(itemsWithWindowVisitCounts, capturedPageTitles);
+    const renamedItems = applyTitleOverridesToItems(capturedTitleItems, titleOverrides);
     const matchedItems = filterHistoryItemsByQuery(renamedItems, query);
     const visibleItems = showRenamedOnly
       ? matchedItems.filter((item) => item.isTitleRenamed)
       : matchedItems;
-    const titleDedupedItems = dedupeHistoryItems(visibleItems, DEDUPE_MODE);
-    const dedupedItems = showMinimalMode
-      ? dedupeHistoryItems(titleDedupedItems, MINIMAL_DEDUPE_MODE)
-      : titleDedupedItems;
+    const urlDedupedItems = dedupeHistoryItems(visibleItems, 'normalized-url');
+    const titleDedupedItems = dedupeHistoryItems(urlDedupedItems, DEDUPE_MODE);
+    const dedupedItems = titleDedupedItems;
     const groupedItems = applyGroupNameOverridesToGroups(groupHistoryItems(dedupedItems, 'domain'));
+
+    if (!isLatestSearchRequest(searchRequestId)) {
+      return;
+    }
 
     currentGroups = showRenamedOnly ? [] : groupedItems;
     currentFlatItems = showRenamedOnly ? sortItemsByDisplayName(dedupedItems) : [];
@@ -142,8 +165,18 @@ async function runSearch() {
     }
     setStatus(showRenamedOnly ? `${dedupedItems.length} 条已重命名` : `${dedupedItems.length} 条`);
   } catch (error) {
-    renderError(error);
+    if (isLatestSearchRequest(searchRequestId)) {
+      renderError(error);
+    }
   }
+}
+
+function isLatestSearchRequest(searchRequestId) {
+  if (searchRequestId !== latestSearchRequestId) {
+    return false;
+  }
+
+  return true;
 }
 
 function applyLastSearchState(state) {
@@ -157,9 +190,122 @@ function applyLastSearchState(state) {
   showMinimalMode = Boolean(state.showMinimalMode);
 }
 
+function selectQueryInputOnPopupOpen() {
+  if (!document.body.classList.contains('popup-body')) {
+    return;
+  }
+
+  queryInput.focus();
+  queryInput.select();
+}
+
 function setRangeSelectValue(value) {
   if ([...rangeSelect.options].some((option) => option.value === value)) {
     rangeSelect.value = value;
+    syncRangeSelect();
+  }
+}
+
+function setupRangeSelect() {
+  if (!rangeSelect) {
+    return;
+  }
+
+  const wrapper = document.createElement('div');
+  wrapper.className = 'range-combobox';
+
+  const button = document.createElement('button');
+  button.className = 'range-combobox-button';
+  button.type = 'button';
+  button.setAttribute('aria-haspopup', 'listbox');
+  button.setAttribute('aria-expanded', 'false');
+
+  const value = document.createElement('span');
+  value.className = 'range-combobox-value';
+
+  const arrow = document.createElement('span');
+  arrow.className = 'range-combobox-arrow';
+  arrow.setAttribute('aria-hidden', 'true');
+
+  const menu = document.createElement('div');
+  menu.className = 'range-combobox-menu';
+  menu.hidden = true;
+  menu.setAttribute('role', 'listbox');
+
+  const options = [...rangeSelect.options].map((selectOption) => {
+    const option = document.createElement('button');
+    option.className = 'range-combobox-option';
+    option.type = 'button';
+    option.textContent = selectOption.textContent;
+    option.dataset.value = selectOption.value;
+    option.setAttribute('role', 'option');
+    option.addEventListener('click', () => {
+      rangeSelect.value = selectOption.value;
+      syncRangeSelect();
+      closeRangeSelect();
+      button.focus();
+    });
+    menu.append(option);
+    return option;
+  });
+
+  button.append(value, arrow);
+  wrapper.append(button, menu);
+  rangeSelect.classList.add('native-select-hidden');
+  rangeSelect.insertAdjacentElement('afterend', wrapper);
+  rangeDropdown = { button, menu, options, value, wrapper };
+
+  button.addEventListener('click', () => {
+    if (menu.hidden) {
+      openRangeSelect();
+    } else {
+      closeRangeSelect();
+    }
+  });
+  document.addEventListener('click', (event) => {
+    if (!wrapper.contains(event.target)) {
+      closeRangeSelect();
+    }
+  });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      closeRangeSelect();
+    }
+  });
+  syncRangeSelect();
+}
+
+function openRangeSelect() {
+  if (!rangeDropdown) {
+    return;
+  }
+
+  rangeDropdown.menu.hidden = false;
+  rangeDropdown.button.setAttribute('aria-expanded', 'true');
+}
+
+function closeRangeSelect() {
+  if (!rangeDropdown) {
+    return;
+  }
+
+  rangeDropdown.menu.hidden = true;
+  rangeDropdown.button.setAttribute('aria-expanded', 'false');
+}
+
+function syncRangeSelect() {
+  if (!rangeDropdown) {
+    return;
+  }
+
+  const selected = [...rangeSelect.options].find((option) => option.value === rangeSelect.value);
+  const selectedLabel = selected?.textContent ?? '';
+  rangeDropdown.value.textContent = selectedLabel;
+  rangeDropdown.button.title = selectedLabel;
+
+  for (const option of rangeDropdown.options) {
+    const isSelected = option.dataset.value === rangeSelect.value;
+    option.setAttribute('aria-selected', String(isSelected));
   }
 }
 
@@ -259,8 +405,59 @@ function renderSummary(rawCount, dedupedCount, groupCount) {
   summary.replaceChildren(
     createRenameMetric(),
     createMinimalModeMetric(),
+    createRefreshTitlesMetric(),
     createCollapseMetric()
   );
+}
+
+function createRefreshTitlesMetric() {
+  const metric = document.createElement('button');
+  metric.className = 'metric metric-button';
+  metric.type = 'button';
+  metric.disabled = refreshTitleProgress?.status === 'running';
+  metric.title = '在共享当前登录态的新窗口中串行刷新近 7 天网页标题';
+
+  const metricLabel = document.createElement('span');
+  metricLabel.textContent = '刷新标题';
+  if (refreshTitleProgress) {
+    metricLabel.textContent = refreshTitleProgress.status === 'running'
+      ? `刷新 ${refreshTitleProgress.completed}/${refreshTitleProgress.total}`
+      : `已刷新 ${refreshTitleProgress.updated}`;
+  }
+
+  metric.append(metricLabel);
+  metric.addEventListener('click', refreshRecentTitles);
+  return metric;
+}
+
+async function refreshRecentTitles() {
+  refreshTitleProgress = { status: 'running', completed: 0, total: 0, updated: 0, failed: 0 };
+  renderSummary();
+  try {
+    const response = await sendRuntimeMessage({ type: REFRESH_LIVE_TITLES_MESSAGE });
+    if (!response?.ok) {
+      throw new Error(response?.error || '刷新标题失败。');
+    }
+    refreshTitleProgress = response;
+    setStatus(`标题刷新完成：${response.updated} 成功，${response.failed} 失败`);
+  } catch (error) {
+    refreshTitleProgress = null;
+    setStatus(error.message || '刷新标题失败');
+  }
+  renderSummary();
+}
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      const lastError = chrome.runtime?.lastError;
+      if (lastError) {
+        reject(new Error(lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
 }
 
 function renderResults(groups, options = {}) {
@@ -298,23 +495,12 @@ function renderFlatResults(items) {
 }
 
 function applyPinnedStateToItems(items, pinnedKeys) {
-  const [group] = applyPinnedStateToGroups(
-    [
-      {
-        key: 'renamed-pages',
-        label: 'renamed-pages',
-        items
-      }
-    ],
-    pinnedKeys
-  );
-
-  return group?.items ?? [];
+  return applyPinnedStateToItemsByName(items, pinnedKeys);
 }
 
 function sortItemsByDisplayName(items) {
   return [...items].sort((left, right) => {
-    const byName = nameCollator.compare(getItemDisplayName(left), getItemDisplayName(right));
+    const byName = compareDisplayNames(getItemDisplayName(left), getItemDisplayName(right));
     const byTime = Number(right?.lastVisitTime ?? 0) - Number(left?.lastVisitTime ?? 0);
     return byName || byTime || String(left?.url ?? '').localeCompare(String(right?.url ?? ''));
   });
@@ -399,6 +585,12 @@ function createResultItem(item, groupKey) {
   const titleRow = document.createElement('div');
   titleRow.className = 'result-title-row';
 
+  const content = document.createElement('div');
+  content.className = 'result-content';
+
+  const actions = document.createElement('div');
+  actions.className = 'result-actions';
+
   const title = document.createElement('a');
   title.className = 'result-title';
   title.href = item.url;
@@ -406,7 +598,8 @@ function createResultItem(item, groupKey) {
   title.rel = 'noreferrer';
   title.textContent = item.title || item.url || '(无标题)';
 
-  titleRow.append(title, createRenameButton(item), createPinButton(item));
+  titleRow.append(title);
+  actions.append(createRenameButton(item), createPinButton(item));
 
   const meta = document.createElement('div');
   meta.className = 'result-meta';
@@ -415,15 +608,16 @@ function createResultItem(item, groupKey) {
     createTag(`${item.totalVisitCount || item.visitCount || 0} 次访问`)
   );
 
-  row.append(titleRow);
+  content.append(titleRow);
   if (!showMinimalMode) {
     const url = document.createElement('div');
     url.className = 'result-url';
     url.title = item.url || '';
     url.textContent = formatHistoryUrlForGroup(item, groupKey);
-    row.append(url);
+    content.append(url);
   }
-  row.append(meta);
+  content.append(meta);
+  row.append(content, actions);
   return row;
 }
 
@@ -729,7 +923,7 @@ async function saveRenameDialogTitle() {
   }
 
   try {
-    await saveTitleOverridesForKeys(getRenameDialogTitleOverrideKeys(), normalizedTitle);
+    await saveTitleOverride(getRenameDialogTitleOverrideKey(), normalizedTitle);
     titleOverrides = await loadTitleOverrides();
     closeRenameDialog();
     await runSearch();
@@ -747,7 +941,7 @@ async function restoreRenameDialogOriginalTitle() {
   renameDialog.input.value = originalTitle;
 
   try {
-    await deleteTitleOverrides(getRenameDialogTitleOverrideKeys());
+    await deleteTitleOverrides([getRenameDialogTitleOverrideKey()]);
     titleOverrides = await loadTitleOverrides();
     closeRenameDialog();
     await runSearch();
@@ -756,16 +950,12 @@ async function restoreRenameDialogOriginalTitle() {
   }
 }
 
-function getRenameDialogTitleOverrideKeys() {
+function getRenameDialogTitleOverrideKey() {
   if (!renameDialogItem) {
-    return [];
+    return '';
   }
 
-  if (Array.isArray(renameDialogItem.titleOverrideKeys) && renameDialogItem.titleOverrideKeys.length) {
-    return renameDialogItem.titleOverrideKeys;
-  }
-
-  return [renameDialogItem.titleOverrideKey || getHistoryItemTitleOverrideKey(renameDialogItem)];
+  return renameDialogItem.titleOverrideKey || getHistoryItemTitleOverrideKey(renameDialogItem);
 }
 
 function renameGroup(group) {
@@ -847,7 +1037,7 @@ function applyGroupNameOverridesToGroups(groups) {
     })
     .sort((left, right) => {
       const byRename = Number(right.isGroupRenamed) - Number(left.isGroupRenamed);
-      const byName = nameCollator.compare(getGroupDisplayName(left), getGroupDisplayName(right));
+      const byName = compareDisplayNames(getGroupDisplayName(left), getGroupDisplayName(right));
       return byRename || byName || left.originalIndex - right.originalIndex;
     })
     .map((group) => {
@@ -939,6 +1129,13 @@ function addStorageChangeListener() {
 
     if (changes[TITLE_OVERRIDES_STORAGE_KEY]) {
       titleOverrides = normalizeTitleOverrideMap(changes[TITLE_OVERRIDES_STORAGE_KEY].newValue);
+      runSearch();
+    }
+
+    if (changes[CAPTURED_PAGE_TITLES_STORAGE_KEY]) {
+      capturedPageTitles = normalizeCapturedTitleMap(
+        changes[CAPTURED_PAGE_TITLES_STORAGE_KEY].newValue
+      );
       runSearch();
     }
 

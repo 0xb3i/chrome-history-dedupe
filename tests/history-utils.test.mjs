@@ -2,13 +2,17 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  applyCapturedTitlesToItems,
   applyPinnedStateToGroups,
+  applyPinnedStateToItemsByName,
   applyTitleOverridesToItems,
   dedupeHistoryItems,
   filterHistoryItemsByQuery,
   formatHistoryUrlForGroup,
+  getHistoryItemCapturedTitleKey,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
+  getUniqueRefreshableHistoryUrls,
   groupHistoryItems,
   normalizeHistoryKey
 } from '../src/history-utils.js';
@@ -34,6 +38,22 @@ test('normalized URL mode collapses repeat visits and keeps the latest item', ()
   assert.equal(result.id, 'newer');
   assert.equal(result.dedupeCount, 2);
   assert.equal(result.dedupeKey, 'https://example.com/a?b=2');
+});
+
+test('two-stage dedupe merges one normalized URL before comparing page titles', () => {
+  const url =
+    'https://dataleap-tx.tiktok-row.net/coral/datamap/result?query=i18n_ecom_alliance.ods_agent_trajectory_segments';
+  const urlDedupedItems = dedupeHistoryItems(
+    [
+      { id: 'old-title', title: 'ods_agent_trajectory_segments', url, visitCount: 3 },
+      { id: 'new-title', title: 'DataLeap - 数据地图', url, visitCount: 11 }
+    ],
+    'normalized-url'
+  );
+  const results = dedupeHistoryItems(urlDedupedItems, 'page-title');
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].totalVisitCount, 14);
 });
 
 test('normalized URL mode strips common tracking parameters but preserves meaningful parameters', () => {
@@ -62,6 +82,30 @@ test('exact URL mode does not collapse query parameter variants', () => {
   );
 });
 
+test('normalized URL and minimal modes keep DataLeap detail and search-result pages distinct', () => {
+  const detailUrl =
+    'https://dataleap-tx.tiktok-row.net/coral/datamap/detail?groupName=og&qualifiedName=HiveTable%3A%2F%2F%2Fi18n_ecom_alliance%2Fods_agent_trajectory_segments%409&subTab=schema&tab=table_info#group=og';
+  const resultUrl =
+    'https://dataleap-tx.tiktok-row.net/coral/datamap/result?query=i18n_ecom_alliance.ods_agent_trajectory_segments';
+  const results = dedupeHistoryItems(
+    [
+      { id: 'detail', title: 'ods_agent_trajectory_segments', url: detailUrl },
+      { id: 'result', title: 'ods_agent_trajectory_segments', url: resultUrl }
+    ],
+    'normalized-url'
+  );
+
+  assert.equal(results.length, 2);
+  assert.deepEqual(new Set(results.map((item) => item.url)), new Set([detailUrl, resultUrl]));
+
+  const minimalResults = dedupeHistoryItems(results, 'minimal-service');
+  assert.equal(minimalResults.length, 2);
+  assert.deepEqual(
+    new Set(minimalResults.map((item) => item.url)),
+    new Set([detailUrl, resultUrl])
+  );
+});
+
 test('domain mode collapses all pages from the same hostname', () => {
   const [result] = dedupeHistoryItems(
     [
@@ -83,32 +127,67 @@ test('invalid URLs fall back to their raw URL string', () => {
   assert.equal(key, 'not a valid url');
 });
 
-test('page title mode collapses different URLs with the same title and keeps the highest visit count', () => {
+test('page title mode collapses same live-title tabs of one stable resource', () => {
   const results = dedupeHistoryItems(
-    [
+    applyCapturedTitlesToItems([
       {
         id: 'older-high-count',
-        title: 'MCP Inspector',
+        title: 'Loading',
         url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa/inspector',
         lastVisitTime: 200,
         visitCount: 12
       },
       {
         id: 'newer-low-count',
-        title: 'MCP Inspector',
+        title: 'Loading',
         url: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa/tools',
         lastVisitTime: 400,
         visitCount: 3
       }
-    ],
+    ], new Map([
+      ['https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa', 'MCP Inspector']
+    ])),
     'page-title'
   );
 
   assert.equal(results.length, 1);
   assert.equal(results[0].id, 'older-high-count');
-  assert.equal(results[0].dedupeKey, 'mcp inspector');
+  assert.match(results[0].dedupeKey, /mcp inspector/);
+  assert.match(results[0].dedupeKey, /4syx48fa/);
   assert.equal(results[0].dedupeCount, 2);
   assert.equal(results[0].totalVisitCount, 15);
+});
+
+test('page title mode keeps unrelated resources with the same original title distinct', () => {
+  const results = dedupeHistoryItems(
+    [
+      {
+        id: 'docs-a',
+        title: 'Docs',
+        url: 'https://docs.example.com/doc/abc12345?tab=content'
+      },
+      {
+        id: 'docs-b',
+        title: 'Docs',
+        url: 'https://docs.example.com/doc/xyz98765?tab=content'
+      }
+    ],
+    'page-title'
+  );
+
+  assert.equal(results.length, 2);
+});
+
+test('stale history titles never affect display search or cross-URL dedupe', () => {
+  const items = applyCapturedTitlesToItems([
+    { id: 'a', title: 'Docs', url: 'https://example.com/doc/abc12345' },
+    { id: 'b', title: 'Docs', url: 'https://example.com/doc/xyz98765' }
+  ]);
+
+  assert.equal(items[0].title, '');
+  assert.equal(items[1].title, '');
+  assert.equal(filterHistoryItemsByQuery(items, 'Docs').length, 0);
+  assert.equal(dedupeHistoryItems(items, 'page-title').length, 2);
 });
 
 test('page title mode falls back to normalized URL when title is empty', () => {
@@ -138,33 +217,38 @@ test('page title mode falls back to normalized URL when title is empty', () => {
 });
 
 test('page title mode ignores zero-width characters in titles', () => {
+  const capturedKey =
+    'https://bytedance.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb';
   const results = dedupeHistoryItems(
-    [
+    applyCapturedTitlesToItems([
       {
         id: 'plain-title',
-        title: '联盟搜索 & Agent 周报 20260603 - 20260609 - 飞书云文档',
+        title: 'Docs',
         url: 'https://bytedance.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb?open_in_browser=true',
         lastVisitTime: 100,
         visitCount: 4
       },
       {
         id: 'zero-width-title',
-        title:
-          '\u200c\u2064\u2062\u200b\u200c\u2061\u200c\u200b\u2063\u2063\u200d\u2061\u2061\u200d\u200d\u2061\u2064\u2062\u200d\u2061联盟搜索 & Agent 周报 20260603 - 20260609 - 飞书云文档',
+        title: 'Docs',
         url: 'https://bytedance.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb?open_in_browser=true&create_from=create_doc_to_wiki',
         lastVisitTime: 300,
         visitCount: 6
       }
-    ],
+    ], new Map([[
+      capturedKey,
+      '\u200c\u2064\u2062\u200b联盟搜索 & Agent 周报 20260603 - 20260609 - 飞书云文档'
+    ]])),
     'page-title'
   );
 
   assert.equal(results.length, 1);
   assert.equal(results[0].id, 'zero-width-title');
-  assert.equal(
+  assert.match(
     results[0].dedupeKey,
-    '联盟搜索 & agent 周报 20260603 - 20260609 - 飞书云文档'
+    /^联盟搜索 & agent 周报 20260603 - 20260609 - 飞书云文档\n/
   );
+  assert.match(results[0].dedupeKey, /FkjVwUDZciqChskTeQcc2ATjnQb/);
 });
 
 test('minimal service mode merges tab-like pages under the same resource id', () => {
@@ -426,7 +510,52 @@ test('title override keys normalize URLs so tracking variants share one custom t
   assert.equal(key, 'https://example.com/docs?b=2');
 });
 
-test('title overrides are applied before page-title dedupe', () => {
+test('captured live titles replace stale history titles before manual overrides', () => {
+  const url = 'https://example.com/doc/abc12345';
+  const capturedItems = applyCapturedTitlesToItems(
+    [{ id: 'doc', title: 'Docs', url }],
+    new Map([[url, '真实文档标题 - 飞书云文档']])
+  );
+  const renamedItems = applyTitleOverridesToItems(
+    capturedItems,
+    new Map([[url, '我的自定义标题']])
+  );
+
+  assert.equal(capturedItems[0].title, '真实文档标题 - 飞书云文档');
+  assert.equal(capturedItems[0].historyTitle, 'Docs');
+  assert.equal(capturedItems[0].identityTitle, '真实文档标题 - 飞书云文档');
+  assert.equal(renamedItems[0].title, '我的自定义标题');
+  assert.equal(renamedItems[0].originalTitle, '真实文档标题 - 飞书云文档');
+});
+
+test('display titles remove invisible Unicode format controls that shift text alignment', () => {
+  const url = 'https://example.com/doc/abc12345';
+  const [item] = applyCapturedTitlesToItems(
+    [{ title: 'Docs', url }],
+    new Map([[url, '\u2064\u2062\u200b\u200c字节 Codex 攻略大全 - 飞书云文档']])
+  );
+
+  assert.equal(item.title, '字节 Codex 攻略大全 - 飞书云文档');
+});
+
+test('captured titles share one stable key across query variants of the same document', () => {
+  const liveUrl = 'https://example.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb';
+  const historyUrl =
+    'https://example.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb?open_in_browser=true&from=recent';
+  const capturedKey = getHistoryItemCapturedTitleKey({ url: liveUrl });
+  const [item] = applyCapturedTitlesToItems(
+    [{ title: 'Docs', url: historyUrl }],
+    new Map([[capturedKey, '本地 AI Coding 工具链安装工具 - 飞书云文档']])
+  );
+
+  assert.equal(
+    capturedKey,
+    'https://example.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb'
+  );
+  assert.equal(item.title, '本地 AI Coding 工具链安装工具 - 飞书云文档');
+});
+
+test('title overrides affect display without becoming page-title dedupe identity', () => {
   const rawItems = [
     {
       id: 'docs',
@@ -447,27 +576,57 @@ test('title overrides are applied before page-title dedupe', () => {
     rawItems,
     new Map([['https://example.com/docs', 'Guide']])
   );
-  const [result] = dedupeHistoryItems(renamedItems, 'page-title');
+  const results = dedupeHistoryItems(renamedItems, 'page-title');
 
-  assert.equal(result.dedupeKey, 'guide');
-  assert.equal(result.dedupeCount, 2);
-  assert.equal(result.totalVisitCount, 3);
+  assert.equal(results.length, 2);
 });
 
-test('page title dedupe keeps all title override keys for batch renaming', () => {
+test('keyword search keeps renamed and unrenamed same-title pages separate across resources', () => {
+  const detailUrl =
+    'https://dataleap-tx.tiktok-row.net/coral/datamap/detail?groupName=og&qualifiedName=HiveTable%3A%2F%2F%2Fi18n_ecom_alliance%2Fods_agent_trajectory_segments%409&subTab=schema&tab=table_info#group=og';
+  const resultUrl =
+    'https://dataleap-tx.tiktok-row.net/coral/datamap/result?query=i18n_ecom_alliance.ods_agent_trajectory_segments';
+  const renamedItems = applyTitleOverridesToItems(
+    [
+      {
+        id: 'detail',
+        title: 'DataLeap - Data Map',
+        url: detailUrl,
+        visitCount: 3
+      },
+      {
+        id: 'result',
+        title: 'ods_agent_trajectory_segments',
+        url: resultUrl,
+        visitCount: 20
+      }
+    ],
+    new Map([[normalizeHistoryKey({ url: detailUrl }), 'ods_agent_trajectory_segments']])
+  );
+
+  const results = dedupeHistoryItems(
+    filterHistoryItemsByQuery(renamedItems, 'ods'),
+    'page-title'
+  );
+
+  assert.equal(results.length, 2);
+  assert.equal(results.find((item) => item.id === 'detail')?.isTitleRenamed, true);
+});
+
+test('page title dedupe keeps tab variants of one resource together', () => {
   const [result] = dedupeHistoryItems(
     applyTitleOverridesToItems([
       {
         id: 'docs-a',
         title: 'Docs',
-        url: 'https://example.com/docs/a',
+        url: 'https://example.com/docs/abc12345/overview',
         lastVisitTime: 100,
         visitCount: 1
       },
       {
         id: 'docs-b',
         title: 'Docs',
-        url: 'https://example.com/docs/b',
+        url: 'https://example.com/docs/abc12345/settings',
         lastVisitTime: 200,
         visitCount: 2
       }
@@ -476,8 +635,8 @@ test('page title dedupe keeps all title override keys for batch renaming', () =>
   );
 
   assert.deepEqual(result.titleOverrideKeys, [
-    'https://example.com/docs/a',
-    'https://example.com/docs/b'
+    'https://example.com/docs/abc12345/overview',
+    'https://example.com/docs/abc12345/settings'
   ]);
 });
 
@@ -512,6 +671,50 @@ test('query filtering searches effective renamed titles and URLs', () => {
   assert.deepEqual(
     filterHistoryItemsByQuery(renamedItems, 'Original Title').map((item) => item.id),
     []
+  );
+  assert.deepEqual(
+    filterHistoryItemsByQuery(
+      [{ id: 'non-contiguous', title: 'A B C', url: 'https://example.com/abc' }],
+      'A C'
+    ).map((item) => item.id),
+    ['non-contiguous']
+  );
+});
+
+test('plain keywords search titles only and ignore hidden URL parameters', () => {
+  const items = [
+    {
+      id: 'unrelated-doc',
+      title: 'Generator 模块后训练技术方案 - 飞书云文档',
+      url: 'https://example.com/wiki/abc12345?source=ods_agent_trajectory_segments'
+    },
+    {
+      id: 'renamed-target',
+      title: 'ods_agent_trajectory_segments',
+      url: 'https://example.com/wiki/xyz98765'
+    }
+  ];
+
+  assert.deepEqual(
+    filterHistoryItemsByQuery(items, 'ods').map((item) => item.id),
+    ['renamed-target']
+  );
+  assert.deepEqual(
+    filterHistoryItemsByQuery(items, 'https://example.com/wiki/abc12345').map((item) => item.id),
+    ['unrelated-doc']
+  );
+});
+
+test('title refresh candidates dedupe URL variants and keep only web pages', () => {
+  assert.deepEqual(
+    getUniqueRefreshableHistoryUrls([
+      { url: 'https://example.com/a?utm_source=mail#tab' },
+      { url: 'https://example.com/a' },
+      { url: 'http://example.com/b' },
+      { url: 'chrome://settings/' },
+      { url: 'file:///tmp/report.html' }
+    ]),
+    ['https://example.com/a?utm_source=mail#tab', 'http://example.com/b']
   );
 });
 
@@ -617,4 +820,34 @@ test('unpinned pages return to the original group sort order', () => {
     [false, false, false]
   );
   assert.equal(unpinnedGroups[0].pinnedCount, 0);
+});
+
+test('renamed view sorts pinned and unpinned sections independently by display name', () => {
+  const items = applyPinnedStateToItemsByName(
+    [
+      { id: 'unpinned-z', title: 'Zulu', url: 'https://example.com/z' },
+      { id: 'pinned-z', title: 'Pinned Zulu', url: 'https://example.com/pinned-z' },
+      { id: 'unpinned-a', title: 'Alpha', url: 'https://example.com/a' },
+      { id: 'pinned-a', title: 'Pinned Alpha', url: 'https://example.com/pinned-a' }
+    ],
+    new Set(['https://example.com/pinned-z', 'https://example.com/pinned-a'])
+  );
+
+  assert.deepEqual(
+    items.map((item) => item.id),
+    ['pinned-a', 'pinned-z', 'unpinned-a', 'unpinned-z']
+  );
+});
+
+test('renamed view places Latin names before Chinese names within each pin section', () => {
+  const items = applyPinnedStateToItemsByName(
+    [
+      { id: 'chinese', title: '压测', url: 'https://example.com/load-test' },
+      { id: 'eval', title: 'Eval 发版', url: 'https://example.com/eval' },
+      { id: 'agent', title: 'Agent 编译', url: 'https://example.com/agent' }
+    ],
+    new Set()
+  );
+
+  assert.deepEqual(items.map((item) => item.id), ['agent', 'eval', 'chinese']);
 });
