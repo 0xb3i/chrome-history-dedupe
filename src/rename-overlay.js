@@ -86,7 +86,24 @@
     overlay.append(panel);
     shadow.append(createStyle(), overlay);
 
-    const close = () => host.remove();
+    const protectRenameKeystroke = (event) => {
+      if (!event.composedPath().includes(host)) {
+        return;
+      }
+
+      event.stopImmediatePropagation();
+
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        close();
+      }
+    };
+    const close = () => {
+      window.removeEventListener('keydown', protectRenameKeystroke, true);
+      host.remove();
+    };
+
+    window.addEventListener('keydown', protectRenameKeystroke, true);
 
     cancelButton.addEventListener('click', close);
     overlay.addEventListener('click', (event) => {
@@ -103,13 +120,6 @@
       input.value = draft.originalTitle || draft.url || '';
       restoreRename(draft, status, close);
     });
-    shadow.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        close();
-      }
-    });
-
     input.focus();
     input.select();
   }

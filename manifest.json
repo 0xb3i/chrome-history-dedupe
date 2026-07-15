@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "历史记录去重搜索",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "搜索 Chrome 历史记录，并自动合并重复 URL。",
   "icons": {
     "16": "icons/icon-16.png",

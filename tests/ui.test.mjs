@@ -458,6 +458,13 @@ test('inline rename dialog can save, restore, cancel, and close with Escape', ()
   assert.equal(renameOverlayJs.includes("event.key === 'Escape'"), true);
 });
 
+test('inline rename input isolates keystrokes from host page shortcuts', () => {
+  assert.equal(renameOverlayJs.includes("window.addEventListener('keydown', protectRenameKeystroke, true)"), true);
+  assert.equal(renameOverlayJs.includes('event.composedPath().includes(host)'), true);
+  assert.equal(renameOverlayJs.includes('event.stopImmediatePropagation()'), true);
+  assert.equal(renameOverlayJs.includes("window.removeEventListener('keydown', protectRenameKeystroke, true)"), true);
+});
+
 test('inline rename dialog hides the current URL to keep the dialog focused', () => {
   assert.equal(renameOverlayJs.includes("url.className = 'url';"), false);
   assert.equal(renameOverlayJs.includes('url.textContent = draft.url'), false);
