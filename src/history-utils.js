@@ -32,11 +32,13 @@ const RESOURCE_ID_QUERY_PARAMS = new Set([
 ]);
 
 export function normalizeHistoryKey(item, mode = DEFAULT_MODE) {
-  const rawUrl = String(item?.url ?? '');
+  const rawUrl = String(item?.dedupeUrl || item?.url || '');
 
   if (mode === 'page-title') {
     const originalTitleKey = normalizeSearchText(item?.identityTitle);
-    const resourceKey = getStableResourceKey(rawUrl) || normalizeHistoryKey(item, 'normalized-url');
+    const resourceKey = getStableResourceKey(rawUrl) ||
+      getPageRouteKey(rawUrl) ||
+      normalizeHistoryKey(item, 'normalized-url');
     return originalTitleKey ? `${originalTitleKey}\n${resourceKey}` : resourceKey;
   }
 
@@ -70,31 +72,37 @@ export function dedupeHistoryItems(items, mode = DEFAULT_MODE) {
 
   for (const item of items) {
     const dedupeKey = normalizeHistoryKey(item, mode);
-    const current = buckets.get(dedupeKey);
+    const entries = buckets.get(dedupeKey);
 
-    if (!current) {
-      buckets.set(
-        dedupeKey,
+    if (!entries) {
+      buckets.set(dedupeKey, [
+        decorateItem(item, dedupeKey, 1, getTotalVisitCount(item), getItemTitleOverrideKeys(item))
+      ]);
+      continue;
+    }
+
+    const targetIndex = findMergeTargetIndex(entries, item);
+
+    if (targetIndex < 0) {
+      entries.push(
         decorateItem(item, dedupeKey, 1, getTotalVisitCount(item), getItemTitleOverrideKeys(item))
       );
       continue;
     }
 
+    const current = entries[targetIndex];
     const preferred = pickPreferredItem(current, item, mode);
     const titleOverrideKeys = mergeTitleOverrideKeys(current, item);
-    buckets.set(
+    entries[targetIndex] = decorateItem(
+      preferred,
       dedupeKey,
-      decorateItem(
-        preferred,
-        dedupeKey,
-        current.dedupeCount + 1,
-        current.totalVisitCount + getTotalVisitCount(item),
-        titleOverrideKeys
-      )
+      current.dedupeCount + 1,
+      current.totalVisitCount + getTotalVisitCount(item),
+      titleOverrideKeys
     );
   }
 
-  return [...buckets.values()].sort((left, right) => {
+  return [...buckets.values()].flat().sort((left, right) => {
     const byTime = getVisitTime(right) - getVisitTime(left);
     return byTime || left.dedupeKey.localeCompare(right.dedupeKey);
   });
@@ -170,38 +178,16 @@ export function formatHistoryUrlForGroup(item, groupKey) {
 }
 
 export function getHistoryItemPinKey(item) {
-  return normalizeHistoryKey(item, 'normalized-url');
+  return normalizeHistoryKey({ url: item?.url }, 'normalized-url');
 }
 
 export function getHistoryItemTitleOverrideKey(item) {
-  return normalizeHistoryKey(item, 'normalized-url');
+  return normalizeHistoryKey({ url: item?.url }, 'normalized-url');
 }
 
 export function getHistoryItemCapturedTitleKey(item) {
   const rawUrl = String(item?.url ?? '');
-  return getStableResourceKey(rawUrl) || normalizeHistoryKey(item, 'normalized-url');
-}
-
-export function getUniqueRefreshableHistoryUrls(items) {
-  const seenKeys = new Set();
-  const urls = [];
-
-  for (const item of items ?? []) {
-    const url = String(item?.url ?? '');
-    if (!/^https?:\/\//i.test(url)) {
-      continue;
-    }
-
-    const key = normalizeHistoryKey({ url }, 'normalized-url');
-    if (!key || seenKeys.has(key)) {
-      continue;
-    }
-
-    seenKeys.add(key);
-    urls.push(url);
-  }
-
-  return urls;
+  return getStableResourceKey(rawUrl) || normalizeHistoryKey({ url: rawUrl }, 'normalized-url');
 }
 
 export function applyTitleOverridesToItems(items, titleOverrides = new Map()) {
@@ -238,7 +224,9 @@ export function applyCapturedTitlesToItems(items, capturedTitles = new Map()) {
 
   return items.map((item) => {
     const titleKey = getHistoryItemCapturedTitleKey(item);
-    const capturedTitle = getUsableOverrideTitle(titles.get(titleKey));
+    const capturedPage = normalizeCapturedPageValue(titles.get(titleKey));
+    const capturedTitle = getUsableOverrideTitle(capturedPage.title);
+    const resolvedUrl = getUsableUrl(capturedPage.resolvedUrl);
     const historyTitle = getUsableOverrideTitle(item?.title);
 
     if (!capturedTitle) {
@@ -254,7 +242,8 @@ export function applyCapturedTitlesToItems(items, capturedTitles = new Map()) {
       ...item,
       historyTitle,
       identityTitle: capturedTitle,
-      title: capturedTitle
+      title: capturedTitle,
+      ...(resolvedUrl ? { dedupeUrl: resolvedUrl, resolvedUrl } : {})
     };
   });
 }
@@ -403,6 +392,37 @@ function getItemTitleOverrideKeys(item) {
   return [...new Set([...keys, key].filter(Boolean))];
 }
 
+function findMergeTargetIndex(entries, candidate) {
+  const candidateRenameKey = getManualRenameKey(candidate);
+
+  if (candidateRenameKey) {
+    const sameRenameIndex = entries.findIndex((entry) => getManualRenameKey(entry) === candidateRenameKey);
+
+    if (sameRenameIndex >= 0) {
+      return sameRenameIndex;
+    }
+
+    const unrenamedIndex = entries.findIndex((entry) => !getManualRenameKey(entry));
+
+    if (unrenamedIndex >= 0) {
+      return unrenamedIndex;
+    }
+
+    return -1;
+  }
+
+  const unrenamedIndex = entries.findIndex((entry) => !getManualRenameKey(entry));
+  return unrenamedIndex >= 0 ? unrenamedIndex : 0;
+}
+
+function getManualRenameKey(item) {
+  if (!item?.isTitleRenamed) {
+    return '';
+  }
+
+  return item?.titleOverrideKey || getHistoryItemTitleOverrideKey(item);
+}
+
 function removeTrackingParams(url) {
   for (const key of [...url.searchParams.keys()]) {
     const normalizedKey = key.toLowerCase();
@@ -455,6 +475,18 @@ function getStableResourceKey(rawUrl) {
     }
 
     return '';
+  } catch {
+    return '';
+  }
+}
+
+function getPageRouteKey(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    url.hash = '';
+    url.search = '';
+    trimTrailingPathSlash(url);
+    return url.href;
   } catch {
     return '';
   }
@@ -568,6 +600,34 @@ function getUsableOverrideTitle(title) {
   return normalized || '';
 }
 
+function normalizeCapturedPageValue(value) {
+  if (value && typeof value === 'object') {
+    return {
+      title: value.title,
+      resolvedUrl: value.resolvedUrl
+    };
+  }
+
+  return {
+    title: value,
+    resolvedUrl: ''
+  };
+}
+
+function getUsableUrl(value) {
+  const rawUrl = String(value ?? '').trim();
+
+  if (!rawUrl) {
+    return '';
+  }
+
+  try {
+    return new URL(rawUrl).href;
+  } catch {
+    return '';
+  }
+}
+
 function normalizeSearchText(value) {
   return String(value ?? '')
     .normalize('NFKC')
@@ -578,9 +638,7 @@ function normalizeSearchText(value) {
 }
 
 function pickPreferredItem(current, candidate, mode = DEFAULT_MODE) {
-  const preservesCustomTitle = mode === 'page-title' || mode === 'minimal-service';
-
-  if (preservesCustomTitle && Boolean(candidate?.isTitleRenamed) !== Boolean(current?.isTitleRenamed)) {
+  if (Boolean(candidate?.isTitleRenamed) !== Boolean(current?.isTitleRenamed)) {
     return candidate?.isTitleRenamed ? candidate : current;
   }
 

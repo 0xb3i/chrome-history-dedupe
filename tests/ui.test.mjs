@@ -18,6 +18,16 @@ test('history surfaces do not expose a dedupe mode selector', () => {
   }
 });
 
+test('history surfaces show the loaded extension version', () => {
+  for (const html of [historyHtml, popupHtml]) {
+    assert.equal(html.includes('id="app-version"'), true);
+    assert.equal(html.includes('class="version-badge"'), true);
+  }
+
+  assert.equal(historyPageJs.includes('chrome?.runtime?.getManifest?.()?.version'), true);
+  assert.equal(historyPageJs.includes('appVersion.textContent = `v${version}`;'), true);
+});
+
 test('history page script dedupes by page title to collapse repeated named pages', () => {
   assert.equal(historyPageJs.includes("querySelector('#mode')"), false);
   assert.equal(historyPageJs.includes('modeSelect'), false);
@@ -344,23 +354,13 @@ test('summary exposes a collapse-all grouped-results action', () => {
   assert.equal(historyPageJs.includes('details.open = false;'), true);
 });
 
-test('summary exposes a seven-day live-title refresh with visible progress', () => {
-  assert.equal(historyPageJs.includes('createRefreshTitlesMetric'), true);
-  assert.equal(historyPageJs.includes('deduped-history:refresh-live-titles'), true);
-  assert.equal(historyPageJs.includes('deduped-history:title-refresh-progress'), true);
-  assert.equal(historyPageJs.includes("metricLabel.textContent = '刷新标题';"), true);
-  assert.equal(historyPageJs.includes('refreshTitleProgress.completed'), true);
-});
-
-test('background refreshes titles in a normal window that shares the current profile', () => {
-  assert.equal(backgroundJs.includes('isAllowedIncognitoAccess'), false);
-  assert.equal(backgroundJs.includes('incognito: true'), false);
-  assert.equal(backgroundJs.includes('incognito: false'), true);
-  assert.equal(backgroundJs.includes('getUniqueRefreshableHistoryUrls'), true);
-  assert.equal(backgroundJs.includes('chrome.history.search'), true);
-  assert.equal(backgroundJs.includes('saveCapturedPageTitle'), true);
-  assert.equal(backgroundJs.includes('deduped-history:title-refresh-progress'), true);
-  assert.equal(backgroundJs.includes('允许无痕模式'), false);
+test('live-title refresh action and background workflow are not exposed', () => {
+  for (const source of [historyPageJs, backgroundJs]) {
+    assert.equal(source.includes('刷新标题'), false);
+    assert.equal(source.includes('deduped-history:refresh-live-titles'), false);
+    assert.equal(source.includes('deduped-history:title-refresh-progress'), false);
+    assert.equal(source.includes('getUniqueRefreshableHistoryUrls'), false);
+  }
 });
 
 test('group toggles and result rows do not accidentally select text', () => {

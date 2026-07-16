@@ -129,6 +129,13 @@ summary:focus-visible {
   min-width: 0;
 }
 
+.version-badge {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
 .brand-mark {
   width: 36px;
   height: 36px;

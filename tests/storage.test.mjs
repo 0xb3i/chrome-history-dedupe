@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  normalizeCapturedPageMap,
   normalizeCapturedTitleMap,
   normalizeLastSearchState,
   removeLegacyBatchTitleOverrides,
@@ -66,6 +67,22 @@ test('captured title records strip invisible Unicode format controls', () => {
       }
     })],
     [['https://example.com/a', 'Agent Node Replay 使用指南 - 飞书云文档']]
+  );
+});
+
+test('captured page records preserve the final URL after redirects', () => {
+  assert.deepEqual(
+    [...normalizeCapturedPageMap({
+      'https://cloud.example.com/legacy': {
+        title: 'Release',
+        resolvedUrl: 'https://cloud.example.com/final',
+        updatedAt: 200
+      }
+    })],
+    [['https://cloud.example.com/legacy', {
+      title: 'Release',
+      resolvedUrl: 'https://cloud.example.com/final'
+    }]]
   );
 });
 

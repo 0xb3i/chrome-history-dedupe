@@ -42,13 +42,15 @@ export async function loadTitleOverrides() {
 
 export async function loadCapturedPageTitles() {
   const storedValue = await getStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, {});
-  return normalizeCapturedTitleMap(storedValue);
+  return normalizeCapturedPageMap(storedValue);
 }
 
-export async function saveCapturedPageTitle(key, title, updatedAt = Date.now()) {
+export async function saveCapturedPageTitle(key, title, options = {}) {
   const normalizedKey = normalizeStorageKey(key);
   const normalizedTitle = normalizeTitle(title);
-  const normalizedUpdatedAt = Number(updatedAt);
+  const saveOptions = typeof options === 'number' ? { updatedAt: options } : options;
+  const normalizedResolvedUrl = normalizeStorageKey(saveOptions?.resolvedUrl);
+  const normalizedUpdatedAt = Number(saveOptions?.updatedAt ?? Date.now());
 
   if (!normalizedKey || !normalizedTitle || !Number.isFinite(normalizedUpdatedAt)) {
     return;
@@ -59,7 +61,8 @@ export async function saveCapturedPageTitle(key, title, updatedAt = Date.now()) 
     storedValue,
     normalizedKey,
     normalizedTitle,
-    normalizedUpdatedAt
+    normalizedUpdatedAt,
+    normalizedResolvedUrl
   );
 
   if (!changed) {
@@ -72,23 +75,29 @@ export async function saveCapturedPageTitle(key, title, updatedAt = Date.now()) 
   await setStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, Object.fromEntries(recentRecords));
 }
 
-export function updateCapturedTitleRecords(value, key, title, updatedAt) {
+export function updateCapturedTitleRecords(value, key, title, updatedAt, resolvedUrl) {
   const records = normalizeCapturedTitleRecords(value);
   const normalizedKey = normalizeStorageKey(key);
   const normalizedTitle = normalizeTitle(title);
   const normalizedUpdatedAt = Number(updatedAt);
+  const normalizedResolvedUrl = normalizeStorageKey(resolvedUrl);
   const current = records.get(normalizedKey);
+  const nextResolvedUrl = normalizedResolvedUrl || current?.resolvedUrl || '';
 
   if (
     !normalizedKey ||
     !normalizedTitle ||
     !Number.isFinite(normalizedUpdatedAt) ||
-    current?.title === normalizedTitle
+    (current?.title === normalizedTitle && (current?.resolvedUrl || '') === nextResolvedUrl)
   ) {
     return { records, changed: false };
   }
 
-  records.set(normalizedKey, { title: normalizedTitle, updatedAt: normalizedUpdatedAt });
+  records.set(normalizedKey, {
+    title: normalizedTitle,
+    updatedAt: normalizedUpdatedAt,
+    ...(nextResolvedUrl ? { resolvedUrl: nextResolvedUrl } : {})
+  });
   return { records, changed: true };
 }
 
@@ -220,6 +229,18 @@ export function normalizeCapturedTitleMap(value) {
   );
 }
 
+export function normalizeCapturedPageMap(value) {
+  return new Map(
+    [...normalizeCapturedTitleRecords(value)].map(([key, record]) => [
+      key,
+      {
+        title: record.title,
+        ...(record.resolvedUrl ? { resolvedUrl: record.resolvedUrl } : {})
+      }
+    ])
+  );
+}
+
 export function removeLegacyBatchTitleOverrides(value) {
   const overrides = normalizeTitleOverrideMap(value);
   const titleCounts = new Map();
@@ -316,11 +337,16 @@ function normalizeCapturedTitleRecords(value) {
 
   for (const [key, record] of entries) {
     const normalizedKey = normalizeStorageKey(key);
-    const normalizedTitle = normalizeTitle(record?.title);
+    const normalizedTitle = normalizeTitle(typeof record === 'string' ? record : record?.title);
     const updatedAt = Number(record?.updatedAt);
+    const resolvedUrl = normalizeStorageKey(record?.resolvedUrl);
 
     if (normalizedKey && normalizedTitle && Number.isFinite(updatedAt)) {
-      records.set(normalizedKey, { title: normalizedTitle, updatedAt });
+      records.set(normalizedKey, {
+        title: normalizedTitle,
+        updatedAt,
+        ...(resolvedUrl ? { resolvedUrl } : {})
+      });
     }
   }
 

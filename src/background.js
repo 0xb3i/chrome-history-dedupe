@@ -1,7 +1,6 @@
 import {
   getHistoryItemCapturedTitleKey,
-  getHistoryItemTitleOverrideKey,
-  getUniqueRefreshableHistoryUrls
+  getHistoryItemTitleOverrideKey
 } from './history-utils.js';
 import {
   deleteTitleOverrides,
@@ -18,15 +17,7 @@ const INLINE_RENAME_SCRIPT = 'src/rename-overlay.js';
 const INLINE_RENAME_INIT_MESSAGE = 'deduped-history:init-inline-rename';
 const INLINE_RENAME_SAVE_MESSAGE = 'deduped-history:save-inline-rename';
 const INLINE_RENAME_RESTORE_MESSAGE = 'deduped-history:restore-inline-rename';
-const REFRESH_LIVE_TITLES_MESSAGE = 'deduped-history:refresh-live-titles';
-const TITLE_REFRESH_PROGRESS_MESSAGE = 'deduped-history:title-refresh-progress';
-const TITLE_REFRESH_DAYS = 7;
-const TITLE_REFRESH_MAX_RESULTS = 10000;
-const TITLE_STABILITY_POLL_MS = 300;
-const TITLE_STABILITY_POLLS = 2;
-const TITLE_LOAD_TIMEOUT_MS = 10000;
 let capturedTitleWriteQueue = Promise.resolve();
-let liveTitleRefreshTask = null;
 
 globalThis.chrome?.tabs?.onUpdated?.addListener((_tabId, changeInfo, tab) => {
   if (changeInfo?.title) {
@@ -57,167 +48,8 @@ globalThis.chrome?.runtime?.onMessage?.addListener((message, _sender, sendRespon
     return true;
   }
 
-  if (message?.type === REFRESH_LIVE_TITLES_MESSAGE) {
-    if (!liveTitleRefreshTask) {
-      liveTitleRefreshTask = refreshRecentLiveTitles().finally(() => {
-        liveTitleRefreshTask = null;
-      });
-    }
-    liveTitleRefreshTask
-      .then((result) => sendResponse({ ok: true, ...result }))
-      .catch((error) => sendResponse({ ok: false, error: error.message || '刷新标题失败。' }));
-    return true;
-  }
-
   return false;
 });
-
-async function refreshRecentLiveTitles() {
-  const historyItems = await searchRecentHistoryItems();
-  const urls = getUniqueRefreshableHistoryUrls(historyItems);
-  const refreshWindow = await createProfileRefreshWindow();
-  const [refreshTab] = refreshWindow?.tabs?.length
-    ? refreshWindow.tabs
-    : await queryTabs({ windowId: refreshWindow?.id });
-  const tabId = refreshTab?.id;
-
-  if (typeof refreshWindow?.id !== 'number' || typeof tabId !== 'number') {
-    throw new Error('无法创建标题刷新窗口。');
-  }
-
-  let completed = 0;
-  let updated = 0;
-  let failed = 0;
-  sendTitleRefreshProgress({ status: 'running', completed, total: urls.length, updated, failed });
-
-  try {
-    await minimizeWindow(refreshWindow.id);
-    for (const url of urls) {
-      try {
-        const tab = await loadTabAndWaitForStableTitle(tabId, url);
-        const titleKey = getHistoryItemCapturedTitleKey({ url });
-        await saveCapturedPageTitle(titleKey, tab.title);
-        updated += 1;
-      } catch {
-        failed += 1;
-      }
-      completed += 1;
-      sendTitleRefreshProgress({ status: 'running', completed, total: urls.length, updated, failed });
-    }
-  } finally {
-    await removeWindow(refreshWindow.id);
-  }
-
-  const result = { status: 'complete', completed, total: urls.length, updated, failed };
-  sendTitleRefreshProgress(result);
-  return result;
-}
-
-function searchRecentHistoryItems() {
-  return new Promise((resolve, reject) => {
-    chrome.history.search(
-      {
-        text: '',
-        startTime: Date.now() - TITLE_REFRESH_DAYS * 24 * 60 * 60 * 1000,
-        maxResults: TITLE_REFRESH_MAX_RESULTS
-      },
-      (items) => {
-        const lastError = chrome.runtime?.lastError;
-        if (lastError) {
-          reject(new Error(lastError.message));
-          return;
-        }
-        resolve(items ?? []);
-      }
-    );
-  });
-}
-
-function createProfileRefreshWindow() {
-  return new Promise((resolve, reject) => {
-    chrome.windows.create(
-      { focused: false, incognito: false, type: 'popup', url: 'about:blank', width: 480, height: 320 },
-      (window) => {
-        const lastError = chrome.runtime?.lastError;
-        if (lastError) {
-          reject(new Error(lastError.message));
-          return;
-        }
-        resolve(window);
-      }
-    );
-  });
-}
-
-function minimizeWindow(windowId) {
-  return new Promise((resolve) => {
-    chrome.windows.update(windowId, { state: 'minimized' }, () => resolve());
-  });
-}
-
-function removeWindow(windowId) {
-  return new Promise((resolve) => {
-    chrome.windows.remove(windowId, () => resolve());
-  });
-}
-
-async function loadTabAndWaitForStableTitle(tabId, url) {
-  await updateTab(tabId, url);
-  const startedAt = Date.now();
-  let lastTitle = '';
-  let stablePolls = 0;
-
-  while (Date.now() - startedAt < TITLE_LOAD_TIMEOUT_MS) {
-    const tab = await getTab(tabId);
-    const title = String(tab?.title ?? '').trim();
-    if (tab?.status === 'complete' && title) {
-      stablePolls = title === lastTitle ? stablePolls + 1 : 0;
-      lastTitle = title;
-      if (stablePolls >= TITLE_STABILITY_POLLS) {
-        return tab;
-      }
-    }
-    await delay(TITLE_STABILITY_POLL_MS);
-  }
-
-  throw new Error('页面标题加载超时。');
-}
-
-function updateTab(tabId, url) {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.update(tabId, { url }, (tab) => {
-      const lastError = chrome.runtime?.lastError;
-      if (lastError) {
-        reject(new Error(lastError.message));
-        return;
-      }
-      resolve(tab);
-    });
-  });
-}
-
-function getTab(tabId) {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.get(tabId, (tab) => {
-      const lastError = chrome.runtime?.lastError;
-      if (lastError) {
-        reject(new Error(lastError.message));
-        return;
-      }
-      resolve(tab);
-    });
-  });
-}
-
-function delay(milliseconds) {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, milliseconds));
-}
-
-function sendTitleRefreshProgress(progress) {
-  chrome.runtime.sendMessage({ type: TITLE_REFRESH_PROGRESS_MESSAGE, progress }, () => {
-    void chrome.runtime?.lastError;
-  });
-}
 
 async function captureOpenTabTitles() {
   try {
@@ -237,7 +69,7 @@ function enqueueCapturedTabTitle(tab) {
 
   const titleKey = getHistoryItemCapturedTitleKey({ url: tab.url });
   capturedTitleWriteQueue = capturedTitleWriteQueue
-    .then(() => saveCapturedPageTitle(titleKey, tab.title))
+    .then(() => saveCapturedPageTitle(titleKey, tab.title, { resolvedUrl: tab.url }))
     .catch(() => {});
 }
 

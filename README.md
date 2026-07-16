@@ -33,8 +33,6 @@ Use the pencil button next to any result to rename that representative URL insid
 
 The background service worker also captures final titles from open tabs and stores the most recent 5,000 URL-title pairs locally. Chrome history titles are never used for display, search, sorting, or dedupe because they may be stale placeholders such as `Docs`. Search uses a manual rename first, then the captured live title; without either, the result displays its URL and only normalized-URL dedupe applies. Existing entries gain titles after their pages are opened again.
 
-The `刷新标题` action serially reloads all unique HTTP(S) URLs visited in the last seven days inside a temporary normal window that shares the current browser profile and SSO session. It captures stable titles, shows progress, and closes the window afterward. These reloads are recorded as new Chrome history visits.
-
 ## Local Data
 
 The extension requests `activeTab`, `history`, `scripting`, `storage`, and `tabs` permissions. It does not upload or sync history. Pinned pages, custom page names, and the last search state are stored locally in `chrome.storage.local`. The `activeTab` and `scripting` permissions are used only to show the inline rename dialog on the current page while Chrome is fullscreen.

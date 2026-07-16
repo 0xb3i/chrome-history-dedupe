@@ -12,7 +12,6 @@ import {
   getHistoryItemCapturedTitleKey,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
-  getUniqueRefreshableHistoryUrls,
   groupHistoryItems,
   normalizeHistoryKey
 } from '../src/history-utils.js';
@@ -38,6 +37,96 @@ test('normalized URL mode collapses repeat visits and keeps the latest item', ()
   assert.equal(result.id, 'newer');
   assert.equal(result.dedupeCount, 2);
   assert.equal(result.dedupeKey, 'https://example.com/a?b=2');
+});
+
+test('normalized URL mode keeps a manually renamed redirect alias before visit count', () => {
+  const [result] = dedupeHistoryItems(
+    applyTitleOverridesToItems(
+      applyCapturedTitlesToItems(
+        [
+          {
+            id: 'renamed-low-count',
+            title: 'Docs',
+            url: 'https://example.com/legacy-doc',
+            lastVisitTime: 100,
+            visitCount: 1
+          },
+          {
+            id: 'plain-high-count',
+            title: 'Docs',
+            url: 'https://example.com/current-doc',
+            lastVisitTime: 200,
+            visitCount: 20
+          }
+        ],
+        new Map([
+          [
+            'https://example.com/legacy-doc',
+            { title: 'Docs', resolvedUrl: 'https://example.com/doc' }
+          ],
+          [
+            'https://example.com/current-doc',
+            { title: 'Docs', resolvedUrl: 'https://example.com/doc' }
+          ]
+        ])
+      ),
+      new Map([['https://example.com/legacy-doc', 'My Docs']])
+    ),
+    'normalized-url'
+  );
+
+  assert.equal(result.id, 'renamed-low-count');
+  assert.equal(result.title, 'My Docs');
+  assert.equal(result.totalVisitCount, 21);
+});
+
+test('normalized URL mode keeps two manually renamed redirect aliases in one bucket', () => {
+  const results = dedupeHistoryItems(
+    applyTitleOverridesToItems(
+      applyCapturedTitlesToItems(
+        [
+          {
+            id: 'legacy-doc',
+            title: 'Docs',
+            url: 'https://example.com/legacy-doc',
+            lastVisitTime: 100,
+            visitCount: 1
+          },
+          {
+            id: 'current-doc',
+            title: 'Docs',
+            url: 'https://example.com/current-doc',
+            lastVisitTime: 200,
+            visitCount: 20
+          }
+        ],
+        new Map([
+          [
+            'https://example.com/legacy-doc',
+            { title: 'Docs', resolvedUrl: 'https://example.com/doc' }
+          ],
+          [
+            'https://example.com/current-doc',
+            { title: 'Docs', resolvedUrl: 'https://example.com/doc' }
+          ]
+        ])
+      ),
+      new Map([
+        ['https://example.com/legacy-doc', 'Legacy Docs'],
+        ['https://example.com/current-doc', 'Current Docs']
+      ])
+    ),
+    'normalized-url'
+  );
+
+  assert.deepEqual(
+    results.map((item) => item.id),
+    ['current-doc', 'legacy-doc']
+  );
+  assert.deepEqual(
+    results.map((item) => item.title),
+    ['Current Docs', 'Legacy Docs']
+  );
 });
 
 test('two-stage dedupe merges one normalized URL before comparing page titles', () => {
@@ -176,6 +265,111 @@ test('page title mode keeps unrelated resources with the same original title dis
   );
 
   assert.equal(results.length, 2);
+});
+
+test('page title mode ignores page-state query variants on the same route', () => {
+  const results = dedupeHistoryItems(
+    [
+      {
+        id: 'release-overview',
+        identityTitle: '代码发布管理 US-TTP BDEE - 字节云',
+        title: '代码发布管理 US-TTP BDEE - 字节云',
+        url: 'https://cloud.example.com/release-management?activeTab=overview&from=recent',
+        visitCount: 2
+      },
+      {
+        id: 'release-instances',
+        identityTitle: '代码发布管理 US-TTP BDEE - 字节云',
+        title: '代码发布管理 US-TTP BDEE - 字节云',
+        url: 'https://cloud.example.com/release-management?activeTab=instances&timestamp=123',
+        visitCount: 3
+      }
+    ],
+    'page-title'
+  );
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].dedupeCount, 2);
+  assert.equal(results[0].totalVisitCount, 5);
+});
+
+test('page title mode keeps a renamed route variant before the higher-visit sibling', () => {
+  const url1 =
+    'https://cloud-ttp-us.bytedance.net/tcc/namespace/bytedance.mcp.ecom_affiliate_tools?by_key=false&condition=name&configId=&dir_path=all_dir&env=ppe_product_selection_niubei&filter_empty_dir=false&filter_no_tag=false&keyword=&order=&pn=1&region=all_region&release_operator=&release_status=&rn=20&scope=all&source=&tab=';
+  const url2 =
+    'https://cloud-ttp-us.bytedance.net/tcc/namespace/bytedance.mcp.ecom_affiliate_tools?by_key=false&condition=name&configId=&dir_path=all_dir&env=prod&filter_empty_dir=false&filter_no_tag=false&keyword=&order=&pn=1&region=all_region&release_operator=&release_status=&rn=20&scope=all&source=&tab=';
+  const capturedTitle = 'TCC 配置管理 - 字节云';
+  const items = applyTitleOverridesToItems(
+    [
+      {
+        id: 'ppe',
+        identityTitle: capturedTitle,
+        title: capturedTitle,
+        url: url1,
+        lastVisitTime: 100,
+        visitCount: 1
+      },
+      {
+        id: 'prod',
+        identityTitle: capturedTitle,
+        title: capturedTitle,
+        url: url2,
+        lastVisitTime: 200,
+        visitCount: 20
+      }
+    ],
+    new Map([[normalizeHistoryKey({ url: url1 }, 'normalized-url'), 'TCC PPE 配置']])
+  );
+  const urlDedupedItems = dedupeHistoryItems(items, 'normalized-url');
+  const [result] = dedupeHistoryItems(urlDedupedItems, 'page-title');
+
+  assert.equal(result.id, 'ppe');
+  assert.equal(result.title, 'TCC PPE 配置');
+  assert.equal(result.url, url1);
+  assert.equal(result.totalVisitCount, 21);
+});
+
+test('page title mode keeps two renamed route variants in one bucket', () => {
+  const url1 =
+    'https://cloud-ttp-us.bytedance.net/tcc/namespace/bytedance.mcp.ecom_affiliate_tools?by_key=false&condition=name&configId=&dir_path=all_dir&env=ppe_product_selection_niubei&filter_empty_dir=false&filter_no_tag=false&keyword=&order=&pn=1&region=all_region&release_operator=&release_status=&rn=20&scope=all&source=&tab=';
+  const url2 =
+    'https://cloud-ttp-us.bytedance.net/tcc/namespace/bytedance.mcp.ecom_affiliate_tools?by_key=false&condition=name&configId=&dir_path=all_dir&env=prod&filter_empty_dir=false&filter_no_tag=false&keyword=&order=&pn=1&region=all_region&release_operator=&release_status=&rn=20&scope=all&source=&tab=';
+  const capturedTitle = 'TCC 配置管理 - 字节云';
+  const items = applyTitleOverridesToItems(
+    [
+      {
+        id: 'ppe',
+        identityTitle: capturedTitle,
+        title: capturedTitle,
+        url: url1,
+        lastVisitTime: 100,
+        visitCount: 1
+      },
+      {
+        id: 'prod',
+        identityTitle: capturedTitle,
+        title: capturedTitle,
+        url: url2,
+        lastVisitTime: 200,
+        visitCount: 20
+      }
+    ],
+    new Map([
+      [normalizeHistoryKey({ url: url1 }, 'normalized-url'), 'TCC PPE 配置'],
+      [normalizeHistoryKey({ url: url2 }, 'normalized-url'), 'TCC Prod 配置']
+    ])
+  );
+  const urlDedupedItems = dedupeHistoryItems(items, 'normalized-url');
+  const results = dedupeHistoryItems(urlDedupedItems, 'page-title');
+
+  assert.deepEqual(
+    results.map((item) => item.id),
+    ['prod', 'ppe']
+  );
+  assert.deepEqual(
+    results.map((item) => item.title),
+    ['TCC Prod 配置', 'TCC PPE 配置']
+  );
 });
 
 test('stale history titles never affect display search or cross-URL dedupe', () => {
@@ -528,6 +722,30 @@ test('captured live titles replace stale history titles before manual overrides'
   assert.equal(renamedItems[0].originalTitle, '真实文档标题 - 飞书云文档');
 });
 
+test('captured redirect targets dedupe different history aliases of one final page', () => {
+  const items = applyCapturedTitlesToItems(
+    [
+      { id: 'legacy-favor', url: 'https://cloud-ttp-us.bytedance.net/scm/legacy-favor' },
+      { id: 'favorite-entry', url: 'https://cloud-ttp-us.bytedance.net/scm/favorite-entry' }
+    ],
+    new Map([
+      ['https://cloud-ttp-us.bytedance.net/scm/legacy-favor', {
+        title: '代码发布管理 US-TTP BDEE - 字节云',
+        resolvedUrl: 'https://cloud-ttp-us.bytedance.net/scm/favor'
+      }],
+      ['https://cloud-ttp-us.bytedance.net/scm/favorite-entry', {
+        title: '代码发布管理 US-TTP BDEE - 字节云',
+        resolvedUrl: 'https://cloud-ttp-us.bytedance.net/scm/favor'
+      }]
+    ])
+  );
+
+  const results = dedupeHistoryItems(items, 'normalized-url');
+
+  assert.equal(results.length, 1);
+  assert.equal(results[0].dedupeCount, 2);
+});
+
 test('display titles remove invisible Unicode format controls that shift text alignment', () => {
   const url = 'https://example.com/doc/abc12345';
   const [item] = applyCapturedTitlesToItems(
@@ -702,19 +920,6 @@ test('plain keywords search titles only and ignore hidden URL parameters', () =>
   assert.deepEqual(
     filterHistoryItemsByQuery(items, 'https://example.com/wiki/abc12345').map((item) => item.id),
     ['unrelated-doc']
-  );
-});
-
-test('title refresh candidates dedupe URL variants and keep only web pages', () => {
-  assert.deepEqual(
-    getUniqueRefreshableHistoryUrls([
-      { url: 'https://example.com/a?utm_source=mail#tab' },
-      { url: 'https://example.com/a' },
-      { url: 'http://example.com/b' },
-      { url: 'chrome://settings/' },
-      { url: 'file:///tmp/report.html' }
-    ]),
-    ['https://example.com/a?utm_source=mail#tab', 'http://example.com/b']
   );
 });
 

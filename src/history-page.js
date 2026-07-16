@@ -21,7 +21,7 @@ import {
   loadLastSearchState,
   loadPinnedUrlKeys,
   loadTitleOverrides,
-  normalizeCapturedTitleMap,
+  normalizeCapturedPageMap,
   normalizeStringSet,
   normalizeTitleOverrideMap,
   PINNED_URLS_STORAGE_KEY,
@@ -36,8 +36,6 @@ const DEDUPE_MODE = 'page-title';
 const MAX_RESULTS = 10000;
 const VISIT_COUNT_CONCURRENCY = 32;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
-const REFRESH_LIVE_TITLES_MESSAGE = 'deduped-history:refresh-live-titles';
-const TITLE_REFRESH_PROGRESS_MESSAGE = 'deduped-history:title-refresh-progress';
 
 const form = document.querySelector('#search-form');
 const queryInput = document.querySelector('#query');
@@ -47,6 +45,7 @@ const statusPill = document.querySelector('#status-pill');
 const summary = document.querySelector('#summary');
 const results = document.querySelector('#results');
 const emptyState = document.querySelector('#empty-state');
+const appVersion = document.querySelector('#app-version');
 const renameDialog = createRenameDialog();
 const groupRenameDialog = createGroupRenameDialog();
 let rangeDropdown = null;
@@ -62,7 +61,6 @@ let groupRenameDialogGroup = null;
 let showRenamedOnly = false;
 let showMinimalMode = false;
 let latestSearchRequestId = 0;
-let refreshTitleProgress = null;
 
 const currentYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   month: 'long',
@@ -82,18 +80,22 @@ setupRangeSelect();
 shortcutSettingsButton?.addEventListener('click', () => {
   globalThis.chrome?.tabs?.create?.({ url: 'chrome://extensions/shortcuts' });
 });
-globalThis.chrome?.runtime?.onMessage?.addListener((message) => {
-  if (message?.type !== TITLE_REFRESH_PROGRESS_MESSAGE) {
+document.body.append(renameDialog.element);
+document.body.append(groupRenameDialog.element);
+renderRuntimeVersion();
+
+init();
+
+function renderRuntimeVersion() {
+  const version = globalThis.chrome?.runtime?.getManifest?.()?.version;
+
+  if (!appVersion || !version) {
     return;
   }
 
-  refreshTitleProgress = message.progress;
-  renderSummary();
-});
-document.body.append(renameDialog.element);
-document.body.append(groupRenameDialog.element);
-
-init();
+  appVersion.textContent = `v${version}`;
+  appVersion.title = `当前扩展版本 v${version}`;
+}
 
 async function init() {
   setLoading();
@@ -405,59 +407,8 @@ function renderSummary(rawCount, dedupedCount, groupCount) {
   summary.replaceChildren(
     createRenameMetric(),
     createMinimalModeMetric(),
-    createRefreshTitlesMetric(),
     createCollapseMetric()
   );
-}
-
-function createRefreshTitlesMetric() {
-  const metric = document.createElement('button');
-  metric.className = 'metric metric-button';
-  metric.type = 'button';
-  metric.disabled = refreshTitleProgress?.status === 'running';
-  metric.title = '在共享当前登录态的新窗口中串行刷新近 7 天网页标题';
-
-  const metricLabel = document.createElement('span');
-  metricLabel.textContent = '刷新标题';
-  if (refreshTitleProgress) {
-    metricLabel.textContent = refreshTitleProgress.status === 'running'
-      ? `刷新 ${refreshTitleProgress.completed}/${refreshTitleProgress.total}`
-      : `已刷新 ${refreshTitleProgress.updated}`;
-  }
-
-  metric.append(metricLabel);
-  metric.addEventListener('click', refreshRecentTitles);
-  return metric;
-}
-
-async function refreshRecentTitles() {
-  refreshTitleProgress = { status: 'running', completed: 0, total: 0, updated: 0, failed: 0 };
-  renderSummary();
-  try {
-    const response = await sendRuntimeMessage({ type: REFRESH_LIVE_TITLES_MESSAGE });
-    if (!response?.ok) {
-      throw new Error(response?.error || '刷新标题失败。');
-    }
-    refreshTitleProgress = response;
-    setStatus(`标题刷新完成：${response.updated} 成功，${response.failed} 失败`);
-  } catch (error) {
-    refreshTitleProgress = null;
-    setStatus(error.message || '刷新标题失败');
-  }
-  renderSummary();
-}
-
-function sendRuntimeMessage(message) {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(message, (response) => {
-      const lastError = chrome.runtime?.lastError;
-      if (lastError) {
-        reject(new Error(lastError.message));
-        return;
-      }
-      resolve(response);
-    });
-  });
 }
 
 function renderResults(groups, options = {}) {
@@ -1133,7 +1084,7 @@ function addStorageChangeListener() {
     }
 
     if (changes[CAPTURED_PAGE_TITLES_STORAGE_KEY]) {
-      capturedPageTitles = normalizeCapturedTitleMap(
+      capturedPageTitles = normalizeCapturedPageMap(
         changes[CAPTURED_PAGE_TITLES_STORAGE_KEY].newValue
       );
       runSearch();
