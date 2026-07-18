@@ -657,6 +657,9 @@ h1 {
 }
 
 .result-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -668,6 +671,7 @@ h1 {
 
 .result-title {
   display: block;
+  flex: 0 1 auto;
   color: var(--text);
   font-size: 14px;
   font-weight: 500;
@@ -678,6 +682,19 @@ h1 {
   text-overflow: ellipsis;
   text-decoration: none;
   transition: color var(--transition);
+  white-space: nowrap;
+}
+
+.renamed-tag {
+  flex: 0 0 auto;
+  border: 1px solid var(--accent-active-bg);
+  border-radius: var(--radius-sm);
+  background: var(--accent-tint);
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 18px;
+  padding: 0 5px;
   white-space: nowrap;
 }
 

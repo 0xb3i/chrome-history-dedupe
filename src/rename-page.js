@@ -67,7 +67,9 @@ async function saveRename() {
   }
 
   try {
-    await saveTitleOverride(currentDraft.titleOverrideKey, title);
+    await saveTitleOverride(currentDraft.titleOverrideKey, title, {
+      targetUrl: currentDraft.url
+    });
     await deleteRenameDraft(currentDraft.id);
     setStatus('已保存');
     closeSoon();

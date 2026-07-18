@@ -1,14 +1,9 @@
-const TRACKING_PARAMS = new Set([
-  'dclid',
-  'fbclid',
-  'gclid',
-  'igshid',
-  'mc_cid',
-  'mc_eid',
-  'msclkid',
-  'twclid',
-  'yclid'
-]);
+import {
+  getLegacyResourceIdentityKey,
+  getPageIdentityKey,
+  getStableResourceIdentityKey,
+  normalizeUrlKey
+} from './page-identity.js';
 
 const DEFAULT_MODE = 'normalized-url';
 const LOCAL_FILE_GROUP_KEY = '本地文件';
@@ -16,30 +11,11 @@ const DISPLAY_NAME_COLLATOR = new Intl.Collator('zh-CN', {
   numeric: true,
   sensitivity: 'base'
 });
-const RESOURCE_ID_QUERY_PARAMS = new Set([
-  'app_id',
-  'base_id',
-  'id',
-  'node_id',
-  'project_id',
-  'qualified_name',
-  'qualifiedname',
-  'resource_id',
-  'server_id',
-  'story_id',
-  'task_id',
-  'work_item_id'
-]);
-
 export function normalizeHistoryKey(item, mode = DEFAULT_MODE) {
   const rawUrl = String(item?.dedupeUrl || item?.url || '');
 
-  if (mode === 'page-title') {
-    const originalTitleKey = normalizeSearchText(item?.identityTitle);
-    const resourceKey = getStableResourceKey(rawUrl) ||
-      getPageRouteKey(rawUrl) ||
-      normalizeHistoryKey(item, 'normalized-url');
-    return originalTitleKey ? `${originalTitleKey}\n${resourceKey}` : resourceKey;
+  if (mode === 'page-family' || mode === 'page-title' || mode === 'minimal-service') {
+    return getPageIdentityKey(rawUrl);
   }
 
   if (mode === 'exact-url') {
@@ -53,15 +29,7 @@ export function normalizeHistoryKey(item, mode = DEFAULT_MODE) {
       return url.hostname.toLowerCase();
     }
 
-    if (mode === 'minimal-service') {
-      return normalizeMinimalServiceKey(url);
-    }
-
-    url.hash = '';
-    removeTrackingParams(url);
-    trimTrailingPathSlash(url);
-
-    return url.href;
+    return normalizeUrlKey(rawUrl);
   } catch {
     return rawUrl;
   }
@@ -72,37 +40,54 @@ export function dedupeHistoryItems(items, mode = DEFAULT_MODE) {
 
   for (const item of items) {
     const dedupeKey = normalizeHistoryKey(item, mode);
-    const entries = buckets.get(dedupeKey);
+    const current = buckets.get(dedupeKey);
 
-    if (!entries) {
-      buckets.set(dedupeKey, [
-        decorateItem(item, dedupeKey, 1, getTotalVisitCount(item), getItemTitleOverrideKeys(item))
-      ]);
+    if (!current) {
+      buckets.set(dedupeKey, decorateItem(item, dedupeKey, {
+        dedupeCount: getDedupeCount(item),
+        lastVisitTime: getVisitTime(item),
+        pinKeys: getItemPinKeys(item),
+        representativeLastVisitTime: getRepresentativeVisitTime(item),
+        representativeVisitCount: getRepresentativeVisitCount(item),
+        representativeVisitCountReliable: isRepresentativeVisitCountReliable(item),
+        searchableTitles: getItemSearchableTitles(item),
+        searchableUrls: getItemSearchableUrls(item),
+        titleOverrideKeys: getItemTitleOverrideKeys(item),
+        totalVisitCount: getTotalVisitCount(item),
+        totalVisitCountReliable: isTotalVisitCountReliable(item)
+      }));
       continue;
     }
 
-    const targetIndex = findMergeTargetIndex(entries, item);
-
-    if (targetIndex < 0) {
-      entries.push(
-        decorateItem(item, dedupeKey, 1, getTotalVisitCount(item), getItemTitleOverrideKeys(item))
-      );
-      continue;
-    }
-
-    const current = entries[targetIndex];
     const preferred = pickPreferredItem(current, item, mode);
-    const titleOverrideKeys = mergeTitleOverrideKeys(current, item);
-    entries[targetIndex] = decorateItem(
-      preferred,
-      dedupeKey,
-      current.dedupeCount + 1,
-      current.totalVisitCount + getTotalVisitCount(item),
-      titleOverrideKeys
-    );
+    const totalVisitCount = getTotalVisitCount(current) + getTotalVisitCount(item);
+    const isNormalizedUrlBucket = mode === 'normalized-url';
+    buckets.set(dedupeKey, decorateItem(preferred, dedupeKey, {
+      dedupeCount: getDedupeCount(current) + getDedupeCount(item),
+      lastVisitTime: Math.max(getVisitTime(current), getVisitTime(item)),
+      pinKeys: mergeStringValues(getItemPinKeys(current), getItemPinKeys(item)),
+      representativeLastVisitTime: isNormalizedUrlBucket
+        ? Math.max(getRepresentativeVisitTime(current), getRepresentativeVisitTime(item))
+        : getRepresentativeVisitTime(preferred),
+      representativeVisitCount: isNormalizedUrlBucket
+        ? getRepresentativeVisitCount(current) + getRepresentativeVisitCount(item)
+        : getRepresentativeVisitCount(preferred),
+      representativeVisitCountReliable: isNormalizedUrlBucket
+        ? isRepresentativeVisitCountReliable(current) && isRepresentativeVisitCountReliable(item)
+        : isRepresentativeVisitCountReliable(preferred),
+      searchableTitles: mergeStringValues(
+        getItemSearchableTitles(current),
+        getItemSearchableTitles(item)
+      ),
+      searchableUrls: mergeStringValues(getItemSearchableUrls(current), getItemSearchableUrls(item)),
+      titleOverrideKeys: mergeTitleOverrideKeys(current, item),
+      totalVisitCount,
+      totalVisitCountReliable: isTotalVisitCountReliable(current) &&
+        isTotalVisitCountReliable(item)
+    }));
   }
 
-  return [...buckets.values()].flat().sort((left, right) => {
+  return [...buckets.values()].sort((left, right) => {
     const byTime = getVisitTime(right) - getVisitTime(left);
     return byTime || left.dedupeKey.localeCompare(right.dedupeKey);
   });
@@ -178,43 +163,73 @@ export function formatHistoryUrlForGroup(item, groupKey) {
 }
 
 export function getHistoryItemPinKey(item) {
-  return normalizeHistoryKey({ url: item?.url }, 'normalized-url');
+  return getPageIdentityKey(String(item?.dedupeUrl || item?.url || ''));
 }
 
 export function getHistoryItemTitleOverrideKey(item) {
-  return normalizeHistoryKey({ url: item?.url }, 'normalized-url');
+  return getPageIdentityKey(String(item?.dedupeUrl || item?.url || ''));
 }
 
 export function getHistoryItemCapturedTitleKey(item) {
-  const rawUrl = String(item?.url ?? '');
-  return getStableResourceKey(rawUrl) || normalizeHistoryKey({ url: rawUrl }, 'normalized-url');
+  return normalizeUrlKey(String(item?.url ?? ''));
 }
 
 export function applyTitleOverridesToItems(items, titleOverrides = new Map()) {
   const overrides = titleOverrides instanceof Map
     ? titleOverrides
     : new Map(Object.entries(titleOverrides ?? {}));
+  const preparedItems = items.map((item) => ({
+    ...item,
+    titleOverrideKey: getHistoryItemTitleOverrideKey(item),
+    isTitleRenamed: false
+  }));
+  const pageBuckets = new Map();
 
-  return items.map((item) => {
-    const titleOverrideKey = getHistoryItemTitleOverrideKey(item);
-    const overrideTitle = getUsableOverrideTitle(overrides.get(titleOverrideKey));
+  preparedItems.forEach((item, index) => {
+    const indexes = pageBuckets.get(item.titleOverrideKey) ?? [];
+    indexes.push(index);
+    pageBuckets.set(item.titleOverrideKey, indexes);
+  });
 
-    if (!overrideTitle) {
-      return {
-        ...item,
-        titleOverrideKey,
-        isTitleRenamed: false
-      };
+  for (const [pageKey, indexes] of pageBuckets) {
+    const overrideCandidates = collectTitleOverrideCandidates(
+      preparedItems,
+      indexes,
+      overrides,
+      pageKey
+    );
+
+    if (overrideCandidates.length === 0) {
+      continue;
     }
 
-    return {
+    const selectedOverride = pickLatestTitleOverride(overrideCandidates);
+    const targetIndex = pickTitleOverrideTargetIndex(
+      preparedItems,
+      indexes,
+      selectedOverride.targetUrl
+    );
+
+    if (targetIndex < 0) {
+      continue;
+    }
+
+    const item = preparedItems[targetIndex];
+    preparedItems[targetIndex] = {
       ...item,
       originalTitle: item?.title ?? '',
-      title: overrideTitle,
-      titleOverrideKey,
-      isTitleRenamed: true
+      title: selectedOverride.title,
+      titleOverrideKey: pageKey,
+      titleOverrideKeys: mergeStringValues(
+        [pageKey],
+        overrideCandidates.map((candidate) => candidate.sourceKey)
+      ),
+      isTitleRenamed: true,
+      renameUpdatedAt: selectedOverride.updatedAt
     };
-  });
+  }
+
+  return preparedItems;
 }
 
 export function applyCapturedTitlesToItems(items, capturedTitles = new Map()) {
@@ -224,9 +239,23 @@ export function applyCapturedTitlesToItems(items, capturedTitles = new Map()) {
 
   return items.map((item) => {
     const titleKey = getHistoryItemCapturedTitleKey(item);
-    const capturedPage = normalizeCapturedPageValue(titles.get(titleKey));
+    const stableResourceKey = getStableResourceIdentityKey(item?.url);
+    const legacyResourceKey = getLegacyResourceIdentityKey(item?.url);
+    const fallbackKeys = mergeStringValues(
+      [stableResourceKey],
+      stableResourceKey === legacyResourceKey ? [legacyResourceKey] : [],
+      [getPageIdentityKey(item?.url)]
+    );
+    const exactCapturedValue = titles.get(titleKey);
+    const capturedValue = exactCapturedValue ??
+      fallbackKeys.map((key) => titles.get(key)).find((value) => value !== undefined);
+    const capturedPage = normalizeCapturedPageValue(capturedValue);
     const capturedTitle = getUsableOverrideTitle(capturedPage.title);
-    const resolvedUrl = getUsableUrl(capturedPage.resolvedUrl);
+    const capturedResolvedUrl = getUsableUrl(capturedPage.resolvedUrl);
+    const resolvedUrl = exactCapturedValue !== undefined ||
+      getPageIdentityKey(capturedResolvedUrl) === getPageIdentityKey(item?.url)
+      ? capturedResolvedUrl
+      : '';
     const historyTitle = getUsableOverrideTitle(item?.title);
 
     if (!capturedTitle) {
@@ -258,9 +287,13 @@ export function filterHistoryItemsByQuery(items, query) {
   const searchesUrl = isUrlSearchQuery(query);
 
   return items.filter((item) => {
-    const searchableText = normalizeSearchText(
-      searchesUrl ? item?.url : item?.title
-    );
+    const searchableValues = searchesUrl
+      ? getItemSearchableUrls(item)
+      : [
+          ...getItemSearchableTitles(item),
+          ...getItemSearchableUrls(item).map(getPlainUrlSearchText)
+        ];
+    const searchableText = normalizeSearchText(searchableValues.join(' '));
     return queryKeywords.every((keyword) => searchableText.includes(keyword));
   });
 }
@@ -278,12 +311,17 @@ export function applyPinnedStateToGroups(groups, pinnedKeys = new Set()) {
 
   return groups.map((group) => {
     const itemsWithPinState = group.items.map((item, index) => {
-      const pinKey = getHistoryItemPinKey(item);
-      const pinOrder = pinOrders.get(pinKey);
+      const pinKeys = getItemPinKeys(item);
+      const activePinKeys = pinKeys.filter((key) => pinOrders.has(key));
+      const pinOrder = activePinKeys.length > 0
+        ? Math.min(...activePinKeys.map((key) => pinOrders.get(key)))
+        : undefined;
 
       return {
         ...item,
-        pinKey,
+        pinKey: getHistoryItemPinKey(item) || pinKeys[0],
+        pinKeys,
+        activePinKeys,
         isPinned: pinOrder !== undefined,
         pinOrder,
         originalIndex: index
@@ -317,8 +355,15 @@ export function applyPinnedStateToItemsByName(items, pinnedKeys = new Set()) {
 
   return items
     .map((item) => {
-      const pinKey = getHistoryItemPinKey(item);
-      return { ...item, pinKey, isPinned: normalizedPinnedKeys.has(pinKey) };
+      const pinKeys = getItemPinKeys(item);
+      const activePinKeys = pinKeys.filter((key) => normalizedPinnedKeys.has(key));
+      return {
+        ...item,
+        pinKey: getHistoryItemPinKey(item) || pinKeys[0],
+        pinKeys,
+        activePinKeys,
+        isPinned: activePinKeys.length > 0
+      };
     })
     .sort((left, right) => {
       const byPin = Number(right.isPinned) - Number(left.isPinned);
@@ -364,13 +409,21 @@ function createPinOrders(pinnedKeys) {
   return orders;
 }
 
-function decorateItem(item, dedupeKey, dedupeCount, totalVisitCount, titleOverrideKeys) {
+function decorateItem(item, dedupeKey, metadata) {
   return {
     ...item,
     dedupeKey,
-    dedupeCount,
-    totalVisitCount,
-    titleOverrideKeys
+    dedupeCount: metadata.dedupeCount,
+    lastVisitTime: metadata.lastVisitTime,
+    pinKeys: metadata.pinKeys,
+    representativeLastVisitTime: metadata.representativeLastVisitTime,
+    representativeVisitCount: metadata.representativeVisitCount,
+    representativeVisitCountReliable: metadata.representativeVisitCountReliable,
+    searchableTitles: metadata.searchableTitles,
+    searchableUrls: metadata.searchableUrls,
+    titleOverrideKeys: metadata.titleOverrideKeys,
+    totalVisitCount: metadata.totalVisitCount,
+    totalVisitCountReliable: metadata.totalVisitCountReliable
   };
 }
 
@@ -392,167 +445,166 @@ function getItemTitleOverrideKeys(item) {
   return [...new Set([...keys, key].filter(Boolean))];
 }
 
-function findMergeTargetIndex(entries, candidate) {
-  const candidateRenameKey = getManualRenameKey(candidate);
-
-  if (candidateRenameKey) {
-    const sameRenameIndex = entries.findIndex((entry) => getManualRenameKey(entry) === candidateRenameKey);
-
-    if (sameRenameIndex >= 0) {
-      return sameRenameIndex;
-    }
-
-    const unrenamedIndex = entries.findIndex((entry) => !getManualRenameKey(entry));
-
-    if (unrenamedIndex >= 0) {
-      return unrenamedIndex;
-    }
-
-    return -1;
-  }
-
-  const unrenamedIndex = entries.findIndex((entry) => !getManualRenameKey(entry));
-  return unrenamedIndex >= 0 ? unrenamedIndex : 0;
+function getItemPinKeys(item) {
+  const keys = Array.isArray(item?.pinKeys) ? item.pinKeys : [];
+  const resolvedKey = getHistoryItemPinKey(item);
+  const originalKey = getPageIdentityKey(String(item?.url || ''));
+  const key = item?.pinKey || resolvedKey || originalKey;
+  return mergeStringValues(keys, [key, resolvedKey, originalKey]);
 }
 
-function getManualRenameKey(item) {
-  if (!item?.isTitleRenamed) {
-    return '';
-  }
-
-  return item?.titleOverrideKey || getHistoryItemTitleOverrideKey(item);
+function getItemSearchableTitles(item) {
+  const titles = Array.isArray(item?.searchableTitles) ? item.searchableTitles : [];
+  return mergeStringValues(titles, [item?.title]);
 }
 
-function removeTrackingParams(url) {
-  for (const key of [...url.searchParams.keys()]) {
-    const normalizedKey = key.toLowerCase();
+function getItemSearchableUrls(item) {
+  const urls = Array.isArray(item?.searchableUrls) ? item.searchableUrls : [];
+  return mergeStringValues(urls, [item?.url, item?.resolvedUrl, item?.dedupeUrl]);
+}
 
-    if (normalizedKey.startsWith('utm_') || TRACKING_PARAMS.has(normalizedKey)) {
-      url.searchParams.delete(key);
+function mergeStringValues(...collections) {
+  const values = new Set();
+
+  for (const collection of collections) {
+    for (const value of collection ?? []) {
+      const normalizedValue = String(value ?? '').trim();
+
+      if (normalizedValue) {
+        values.add(normalizedValue);
+      }
     }
   }
 
-  url.searchParams.sort();
+  return [...values];
 }
 
-function trimTrailingPathSlash(url) {
-  if (url.pathname !== '/' && url.pathname.endsWith('/')) {
-    url.pathname = url.pathname.replace(/\/+$/, '');
-  }
-}
+function collectTitleOverrideCandidates(items, indexes, overrides, pageKey) {
+  const candidates = [];
+  const seenKeys = new Set();
 
-function normalizeMinimalServiceKey(url) {
-  const normalizedUrl = new URL(url.href);
-  normalizedUrl.hash = '';
-  removeTrackingParams(normalizedUrl);
-  trimTrailingPathSlash(normalizedUrl);
-
-  const resourcePath = getMinimalServicePath(normalizedUrl);
-  const resourceQuery = getMinimalServiceQuery(normalizedUrl);
-  const port = normalizedUrl.port ? `:${normalizedUrl.port}` : '';
-
-  if (resourcePath.isMinimal || resourceQuery) {
-    return `${normalizedUrl.protocol}//${normalizedUrl.hostname.toLowerCase()}${port}${resourcePath.value}${resourceQuery}`;
-  }
-
-  return normalizedUrl.href;
-}
-
-function getStableResourceKey(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    const port = url.port ? `:${url.port}` : '';
-    const origin = `${url.protocol}//${url.hostname.toLowerCase()}${port}`;
-    const resourcePath = getMinimalServicePath(url);
-
-    if (resourcePath.hasResourceId) {
-      return `${origin}${resourcePath.value}`;
+  const addCandidate = (sourceKey, value, fallbackTargetUrl, sourceOrder) => {
+    if (!sourceKey || seenKeys.has(sourceKey) || value === undefined) {
+      return;
     }
 
-    const resourceQuery = getMinimalServiceQuery(url);
-    if (resourceQuery) {
-      return `${origin}${url.pathname || '/'}${resourceQuery}`;
+    const record = normalizeTitleOverrideValue(value, fallbackTargetUrl);
+    if (!record.title) {
+      return;
     }
 
-    return '';
-  } catch {
-    return '';
-  }
+    seenKeys.add(sourceKey);
+    candidates.push({ ...record, sourceKey, sourceOrder });
+  };
+
+  addCandidate(pageKey, overrides.get(pageKey), pageKey, Number.MAX_SAFE_INTEGER);
+
+  indexes.forEach((index, sourceOrder) => {
+    const item = items[index];
+    const originalPageKey = getPageIdentityKey(item?.url);
+    const exactKey = normalizeUrlKey(item?.url);
+    addCandidate(originalPageKey, overrides.get(originalPageKey), item?.url, sourceOrder);
+    addCandidate(exactKey, overrides.get(exactKey), item?.url, sourceOrder);
+  });
+
+  return candidates;
 }
 
-function getPageRouteKey(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    url.hash = '';
-    url.search = '';
-    trimTrailingPathSlash(url);
-    return url.href;
-  } catch {
-    return '';
-  }
-}
-
-function getMinimalServicePath(url) {
-  const segments = url.pathname
-    .split('/')
-    .map((segment) => safeDecodeUrlPath(segment).trim())
-    .filter(Boolean);
-
-  const resourceIdIndex = segments.findIndex(isResourceIdPathSegment);
-
-  if (resourceIdIndex >= 0) {
+function normalizeTitleOverrideValue(value, fallbackTargetUrl) {
+  if (value && typeof value === 'object') {
     return {
-      value: `/${segments.slice(0, resourceIdIndex + 1).map(encodePathSegment).join('/')}`,
-      hasResourceId: true,
-      isMinimal: resourceIdIndex < segments.length - 1 || Boolean(url.search)
+      title: getUsableOverrideTitle(value.title),
+      targetUrl: String(value.targetUrl || fallbackTargetUrl || ''),
+      updatedAt: Number.isFinite(Number(value.updatedAt)) ? Number(value.updatedAt) : 0
     };
   }
 
   return {
-    value: url.pathname || '/',
-    hasResourceId: false,
-    isMinimal: false
+    title: getUsableOverrideTitle(value),
+    targetUrl: String(fallbackTargetUrl || ''),
+    updatedAt: 0
   };
 }
 
-function getMinimalServiceQuery(url) {
-  const params = new URLSearchParams();
+function pickLatestTitleOverride(candidates) {
+  return [...candidates].sort((left, right) => {
+    const byUpdatedAt = right.updatedAt - left.updatedAt;
+    return byUpdatedAt || left.sourceKey.localeCompare(right.sourceKey) ||
+      left.targetUrl.localeCompare(right.targetUrl) || left.title.localeCompare(right.title);
+  })[0];
+}
 
-  for (const [key, value] of url.searchParams.entries()) {
-    if (RESOURCE_ID_QUERY_PARAMS.has(key.toLowerCase()) && value.trim()) {
-      params.append(key, value);
+function pickTitleOverrideTargetIndex(items, indexes, targetUrl) {
+  const normalizedTargetUrl = normalizeUrlKey(targetUrl);
+  const exactMatches = indexes.filter(
+    (index) => normalizeUrlKey(items[index]?.url) === normalizedTargetUrl
+  );
+  const resolvedMatches = exactMatches.length > 0
+    ? exactMatches
+    : indexes.filter(
+        (index) => normalizeUrlKey(items[index]?.dedupeUrl || items[index]?.resolvedUrl) === normalizedTargetUrl
+      );
+  const candidates = resolvedMatches.length > 0 ? resolvedMatches : indexes;
+
+  return candidates.reduce((preferredIndex, index) => {
+    if (preferredIndex < 0) {
+      return index;
     }
-  }
 
-  params.sort();
-  const query = params.toString();
-  return query ? `?${query}` : '';
+    return pickPreferredItem(items[preferredIndex], items[index]) === items[index]
+      ? index
+      : preferredIndex;
+  }, -1);
 }
 
-function isResourceIdPathSegment(segment) {
-  const normalizedSegment = segment.toLowerCase();
-
-  if (/^[0-9]{5,}$/.test(normalizedSegment)) {
-    return true;
+function getPlainUrlSearchText(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return `${url.hostname} ${safeDecodeUrlPath(url.pathname)}`;
+  } catch {
+    return rawUrl;
   }
-
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(normalizedSegment)) {
-    return true;
-  }
-
-  return /^(?=.*[a-z])(?=.*\d)[a-z0-9_-]{6,}$/.test(normalizedSegment);
 }
 
-function encodePathSegment(segment) {
-  return encodeURIComponent(segment).replace(/%2F/gi, '/');
+function getDedupeCount(item) {
+  const count = Number(item?.dedupeCount ?? 1);
+  return Number.isFinite(count) && count > 0 ? count : 1;
+}
+
+function getRepresentativeVisitCount(item) {
+  if (item?.representativeVisitCount !== undefined) {
+    return Number(item.representativeVisitCount);
+  }
+
+  if (item?.visitCountReliable === false) {
+    return Number(item?.allTimeVisitCount ?? item?.visitCount ?? 0);
+  }
+
+  return Number(item?.totalVisitCount ?? item?.visitCount ?? 0);
+}
+
+function getRepresentativeVisitTime(item) {
+  return Number(item?.representativeLastVisitTime ?? item?.lastVisitTime ?? 0);
+}
+
+function isRepresentativeVisitCountReliable(item) {
+  return item?.representativeVisitCountReliable ?? (item?.visitCountReliable !== false);
+}
+
+function isTotalVisitCountReliable(item) {
+  return item?.totalVisitCountReliable ?? (item?.visitCountReliable !== false);
+}
+
+function safeDecodeUrlPath(value) {
+  try {
+    return decodeURI(String(value ?? ''));
+  } catch {
+    return String(value ?? '');
+  }
 }
 
 function getVisitTime(item) {
   return Number(item?.lastVisitTime ?? 0);
-}
-
-function getVisitCount(item) {
-  return Number(item?.visitCount ?? 0);
 }
 
 function getTotalVisitCount(item) {
@@ -580,14 +632,6 @@ function getGroupKey(item, mode) {
     return url.hostname.toLowerCase() || rawUrl || '(unknown)';
   } catch {
     return rawUrl || '(unknown)';
-  }
-}
-
-function safeDecodeUrlPath(value) {
-  try {
-    return decodeURI(value);
-  } catch {
-    return value;
   }
 }
 
@@ -637,17 +681,52 @@ function normalizeSearchText(value) {
     .toLowerCase();
 }
 
-function pickPreferredItem(current, candidate, mode = DEFAULT_MODE) {
+function pickPreferredItem(current, candidate) {
   if (Boolean(candidate?.isTitleRenamed) !== Boolean(current?.isTitleRenamed)) {
     return candidate?.isTitleRenamed ? candidate : current;
   }
 
-  const currentVisits = getVisitCount(current);
-  const candidateVisits = getVisitCount(candidate);
+  const currentRenameTime = Number(current?.renameUpdatedAt ?? 0);
+  const candidateRenameTime = Number(candidate?.renameUpdatedAt ?? 0);
+
+  if (current?.isTitleRenamed && candidateRenameTime !== currentRenameTime) {
+    return candidateRenameTime > currentRenameTime ? candidate : current;
+  }
+
+  const currentCountIsReliable = isRepresentativeVisitCountReliable(current);
+  const candidateCountIsReliable = isRepresentativeVisitCountReliable(candidate);
+
+  if (candidateCountIsReliable !== currentCountIsReliable) {
+    return candidateCountIsReliable ? candidate : current;
+  }
+
+  const currentVisits = getRepresentativeVisitCount(current);
+  const candidateVisits = getRepresentativeVisitCount(candidate);
 
   if (candidateVisits !== currentVisits) {
     return candidateVisits > currentVisits ? candidate : current;
   }
 
-  return getVisitTime(candidate) > getVisitTime(current) ? candidate : current;
+  const currentTime = getRepresentativeVisitTime(current);
+  const candidateTime = getRepresentativeVisitTime(candidate);
+
+  if (candidateTime !== currentTime) {
+    return candidateTime > currentTime ? candidate : current;
+  }
+
+  const currentUrl = normalizeUrlKey(current?.url);
+  const candidateUrl = normalizeUrlKey(candidate?.url);
+  const byNormalizedUrl = candidateUrl.localeCompare(currentUrl);
+
+  if (byNormalizedUrl !== 0) {
+    return byNormalizedUrl < 0 ? candidate : current;
+  }
+
+  const currentRawIdentity = [current?.url, current?.title, current?.id]
+    .map((value) => String(value ?? ''))
+    .join('\n');
+  const candidateRawIdentity = [candidate?.url, candidate?.title, candidate?.id]
+    .map((value) => String(value ?? ''))
+    .join('\n');
+  return candidateRawIdentity.localeCompare(currentRawIdentity) < 0 ? candidate : current;
 }

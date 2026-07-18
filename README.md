@@ -21,7 +21,9 @@ When Chrome is in macOS fullscreen, the rename shortcut opens an inline dialog o
 
 ## Behavior
 
-The extension dedupes tab-like pages only when both their original page titles and stable resource identities match. A resource identity is derived from an ID-shaped path segment or resource-ID query parameter; when no reliable identity exists, the extension falls back to normalized URL dedupe. Custom names affect display and search but never page identity. For scoped ranges such as 7 days or 30 days, visit counts are counted inside the selected time window before sorting and deduping.
+The extension derives a stable page identity independently of the page title. It prefers the deepest ID-shaped path segment and aggressively ignores non-resource query parameters, so filters, tabs, sorting, environments, and opaque state after `?` collapse into one page. Only explicit resource-ID parameters such as `id`, `task_id`, and `qualified_name` remain part of the identity; their camelCase, snake_case, and kebab-case aliases are canonicalized. Stateful routes such as `keyword_search` discard every query parameter. Ordinary anchors are ignored, while `#/` and `#!/` application routes remain part of the identity.
+
+Each page identity produces exactly one result. A manually renamed tab wins; otherwise the URL with the highest visit count in the selected time range wins, with the latest visit used as the tie-breaker. Search can match any collapsed tab while still returning that stable representative. Scoped ranges count visits inside the selected time window before selection.
 
 Use the `极简` metric button to hide result URLs for a more compact presentation. It does not change dedupe identity or merge additional pages.
 
@@ -29,9 +31,9 @@ Search results are displayed as collapsible domain groups. For example, `https:/
 
 Pages inside a domain group can be pinned. Multiple pages may be pinned at the same time, pinned pages stay at the top of their group in the order they were pinned, and unpinning returns them to the normal visit-time ordering.
 
-Use the pencil button next to any result to rename that representative URL inside the extension. Renaming never propagates to other URLs in the same dedupe bucket. Version 0.1.5 removes duplicate custom-title records created by the older batch-rename behavior; affected pages need to be renamed once again.
+Use the pencil button next to any result to rename that representative URL inside the extension. Renames are stored once per page identity together with the selected target URL and update time, so renaming another tab replaces the previous page-level rename instead of creating another result. Renamed results show a compact `已重命名` tag beside the custom title. Version 0.3.0 migrates legacy URL-level renames and pins to the same page identity; version 0.3.1 adds the visible rename indicator; version 0.3.2 merges non-resource query variants and migrates their old rename keys.
 
-The background service worker also captures final titles from open tabs and stores the most recent 5,000 URL-title pairs locally. Chrome history titles are never used for display, search, sorting, or dedupe because they may be stale placeholders such as `Docs`. Search uses a manual rename first, then the captured live title; without either, the result displays its URL and only normalized-URL dedupe applies. Existing entries gain titles after their pages are opened again.
+The background service worker captures live titles per URL, follows URL changes during a navigation so redirect aliases can resolve to the final page, and stores up to 5,000 records ordered by their latest title or redirect-target change. Chrome history titles are never used for display or identity because they may be stale placeholders such as `Docs`. Search uses a manual rename first, then the captured live title; without either, the result displays its URL. Existing entries gain titles after their pages are opened again.
 
 ## Local Data
 

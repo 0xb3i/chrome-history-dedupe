@@ -1,3 +1,5 @@
+import { getPageIdentityKey } from './page-identity.js';
+
 export const PINNED_URLS_STORAGE_KEY = 'deduped-history-pinned-urls';
 export const TITLE_OVERRIDES_STORAGE_KEY = 'deduped-history-title-overrides';
 export const GROUP_NAME_OVERRIDES_STORAGE_KEY = 'deduped-history-group-name-overrides';
@@ -9,35 +11,78 @@ export const CAPTURED_PAGE_TITLES_STORAGE_KEY = 'deduped-history-captured-page-t
 const RENAME_DRAFT_TTL_MS = 15 * 60 * 1000;
 const MAX_CAPTURED_PAGE_TITLES = 5000;
 const SEARCH_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter', 'all']);
-const TITLE_OVERRIDES_MIGRATION_VERSION = 1;
+const TITLE_OVERRIDES_MIGRATION_VERSION = 3;
+const STORAGE_MUTATION_LOCK_NAME = 'deduped-history-storage-mutation';
+let storageMutationQueue = Promise.resolve();
 
 export async function loadPinnedUrlKeys() {
   const storedValue = await getStorageValue(PINNED_URLS_STORAGE_KEY, []);
-  return normalizeStringSet(storedValue);
+  return normalizePinnedPageKeys(storedValue);
 }
 
 export async function savePinnedUrlKeys(keys) {
-  await setStorageValue(PINNED_URLS_STORAGE_KEY, [...normalizeStringSet(keys)]);
+  await withStorageMutationLock(async () => {
+    await setStorageValue(PINNED_URLS_STORAGE_KEY, [...normalizePinnedPageKeys(keys)]);
+  });
+}
+
+export async function togglePinnedUrlKey(key, shouldPin, relatedKeys = []) {
+  const normalizedKey = normalizePageKey(key);
+  const normalizedRelatedKeys = normalizePinnedPageKeys(relatedKeys);
+
+  if (!normalizedKey) {
+    return loadPinnedUrlKeys();
+  }
+
+  return withStorageMutationLock(async () => {
+    const keys = normalizePinnedPageKeys(
+      await getStorageValue(PINNED_URLS_STORAGE_KEY, [])
+    );
+
+    if (shouldPin) {
+      keys.add(normalizedKey);
+    } else {
+      keys.delete(normalizedKey);
+      for (const relatedKey of normalizedRelatedKeys) {
+        keys.delete(relatedKey);
+      }
+    }
+
+    await setStorageValue(PINNED_URLS_STORAGE_KEY, [...keys]);
+    return keys;
+  });
 }
 
 export async function loadTitleOverrides() {
-  const storedValue = await getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {});
-  const overrides = normalizeTitleOverrideMap(storedValue);
-  const migrationVersion = Number(
-    await getStorageValue(TITLE_OVERRIDES_MIGRATION_STORAGE_KEY, 0)
-  );
+  const migrationVersion = Number(await getStorageValue(
+    TITLE_OVERRIDES_MIGRATION_STORAGE_KEY,
+    0
+  ));
 
   if (migrationVersion >= TITLE_OVERRIDES_MIGRATION_VERSION) {
-    return overrides;
+    return normalizePageTitleOverrideMap(
+      await getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {})
+    );
   }
 
-  const migratedOverrides = removeLegacyBatchTitleOverrides(overrides);
-  await setStorageValue(TITLE_OVERRIDES_STORAGE_KEY, Object.fromEntries(migratedOverrides));
-  await setStorageValue(
-    TITLE_OVERRIDES_MIGRATION_STORAGE_KEY,
-    TITLE_OVERRIDES_MIGRATION_VERSION
-  );
-  return migratedOverrides;
+  return withStorageMutationLock(async () => {
+    const currentVersion = Number(await getStorageValue(
+      TITLE_OVERRIDES_MIGRATION_STORAGE_KEY,
+      0
+    ));
+    const overrides = normalizePageTitleOverrideMap(
+      await getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {})
+    );
+
+    if (currentVersion < TITLE_OVERRIDES_MIGRATION_VERSION) {
+      await setStorageValues({
+        [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(overrides),
+        [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION
+      });
+    }
+
+    return overrides;
+  });
 }
 
 export async function loadCapturedPageTitles() {
@@ -56,23 +101,25 @@ export async function saveCapturedPageTitle(key, title, options = {}) {
     return;
   }
 
-  const storedValue = await getStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, {});
-  const { records, changed } = updateCapturedTitleRecords(
-    storedValue,
-    normalizedKey,
-    normalizedTitle,
-    normalizedUpdatedAt,
-    normalizedResolvedUrl
-  );
+  await withStorageMutationLock(async () => {
+    const storedValue = await getStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, {});
+    const { records, changed } = updateCapturedTitleRecords(
+      storedValue,
+      normalizedKey,
+      normalizedTitle,
+      normalizedUpdatedAt,
+      normalizedResolvedUrl
+    );
 
-  if (!changed) {
-    return;
-  }
+    if (!changed) {
+      return;
+    }
 
-  const recentRecords = [...records]
-    .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
-    .slice(0, MAX_CAPTURED_PAGE_TITLES);
-  await setStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, Object.fromEntries(recentRecords));
+    const recentRecords = [...records]
+      .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
+      .slice(0, MAX_CAPTURED_PAGE_TITLES);
+    await setStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, Object.fromEntries(recentRecords));
+  });
 }
 
 export function updateCapturedTitleRecords(value, key, title, updatedAt, resolvedUrl) {
@@ -123,9 +170,13 @@ export async function saveGroupNameOverride(key, name) {
     throw new Error('Group rename requires a group key and name');
   }
 
-  const overrides = await loadGroupNameOverrides();
-  overrides.set(normalizedKey, normalizedName);
-  await saveGroupNameOverrides(overrides);
+  await withStorageMutationLock(async () => {
+    const overrides = normalizeTitleOverrideMap(
+      await getStorageValue(GROUP_NAME_OVERRIDES_STORAGE_KEY, {})
+    );
+    overrides.set(normalizedKey, normalizedName);
+    await saveGroupNameOverrides(overrides);
+  });
 }
 
 export async function deleteGroupNameOverride(key) {
@@ -135,29 +186,53 @@ export async function deleteGroupNameOverride(key) {
     return;
   }
 
-  const overrides = await loadGroupNameOverrides();
-  overrides.delete(normalizedKey);
-  await saveGroupNameOverrides(overrides);
+  await withStorageMutationLock(async () => {
+    const overrides = normalizeTitleOverrideMap(
+      await getStorageValue(GROUP_NAME_OVERRIDES_STORAGE_KEY, {})
+    );
+    overrides.delete(normalizedKey);
+    await saveGroupNameOverrides(overrides);
+  });
 }
 
-export async function saveTitleOverride(key, title) {
-  await saveTitleOverridesForKeys([key], title);
-}
-
-export async function saveTitleOverridesForKeys(keys, title) {
+export async function saveTitleOverride(key, title, options = {}) {
+  const normalizedKey = normalizePageKey(key);
   const normalizedTitle = normalizeTitle(title);
+  const normalizedTargetUrl = normalizeStorageKey(options?.targetUrl || options?.url || key);
+  const hasExplicitUpdatedAt = options?.updatedAt !== undefined;
+  const explicitUpdatedAt = Number(options?.updatedAt);
 
-  const normalizedKeys = normalizeStringSet(keys);
-
-  if (normalizedKeys.size === 0 || !normalizedTitle) {
+  if (
+    !normalizedKey ||
+    !normalizedTitle ||
+    (hasExplicitUpdatedAt && !Number.isFinite(explicitUpdatedAt))
+  ) {
     throw new Error('Title override requires a URL key and title');
   }
 
-  const overrides = await loadTitleOverrides();
-  for (const normalizedKey of normalizedKeys) {
-    overrides.set(normalizedKey, normalizedTitle);
-  }
-  await saveTitleOverrides(overrides);
+  await withStorageMutationLock(async () => {
+    const overrides = normalizePageTitleOverrideMap(
+      await getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {})
+    );
+    const current = overrides.get(normalizedKey);
+    const updatedAt = hasExplicitUpdatedAt
+      ? explicitUpdatedAt
+      : Math.max(Date.now(), Number(current?.updatedAt ?? 0) + 1);
+
+    if (hasExplicitUpdatedAt && Number(current?.updatedAt ?? 0) > updatedAt) {
+      return;
+    }
+
+    overrides.set(normalizedKey, {
+      title: normalizedTitle,
+      targetUrl: normalizedTargetUrl,
+      updatedAt
+    });
+    await setStorageValues({
+      [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(overrides),
+      [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION
+    });
+  });
 }
 
 export async function deleteTitleOverrides(keys) {
@@ -167,11 +242,21 @@ export async function deleteTitleOverrides(keys) {
     return;
   }
 
-  const overrides = await loadTitleOverrides();
-  for (const normalizedKey of normalizedKeys) {
-    overrides.delete(normalizedKey);
-  }
-  await saveTitleOverrides(overrides);
+  await withStorageMutationLock(async () => {
+    const overrides = normalizePageTitleOverrideMap(
+      await getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {})
+    );
+
+    for (const normalizedKey of normalizedKeys) {
+      overrides.delete(normalizedKey);
+      overrides.delete(normalizePageKey(normalizedKey));
+    }
+
+    await setStorageValues({
+      [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(overrides),
+      [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION
+    });
+  });
 }
 
 export async function saveRenameDraft(draft) {
@@ -181,9 +266,11 @@ export async function saveRenameDraft(draft) {
     throw new Error('Rename draft requires an id, URL key, and URL');
   }
 
-  const drafts = await loadRenameDrafts();
-  drafts.set(normalizedDraft.id, normalizedDraft);
-  await saveRenameDrafts(pruneRenameDrafts(drafts));
+  await withStorageMutationLock(async () => {
+    const drafts = await loadRenameDrafts();
+    drafts.set(normalizedDraft.id, normalizedDraft);
+    await saveRenameDrafts(pruneRenameDrafts(drafts));
+  });
 }
 
 export async function loadRenameDraft(id) {
@@ -192,9 +279,11 @@ export async function loadRenameDraft(id) {
 }
 
 export async function deleteRenameDraft(id) {
-  const drafts = await loadRenameDrafts();
-  drafts.delete(normalizeStorageKey(id));
-  await saveRenameDrafts(drafts);
+  await withStorageMutationLock(async () => {
+    const drafts = await loadRenameDrafts();
+    drafts.delete(normalizeStorageKey(id));
+    await saveRenameDrafts(drafts);
+  });
 }
 
 export function normalizeStringSet(value) {
@@ -205,6 +294,12 @@ export function normalizeStringSet(value) {
   }
 
   return new Set(values.map(normalizeStorageKey).filter(Boolean));
+}
+
+export function normalizePinnedPageKeys(value) {
+  return new Set(
+    [...normalizeStringSet(value)].map(normalizePageKey).filter(Boolean)
+  );
 }
 
 export function normalizeTitleOverrideMap(value) {
@@ -223,6 +318,38 @@ export function normalizeTitleOverrideMap(value) {
   return overrides;
 }
 
+export function normalizePageTitleOverrideMap(value) {
+  const entries = value instanceof Map ? [...value.entries()] : Object.entries(value ?? {});
+  const overrides = new Map();
+
+  entries.forEach(([storedKey, storedRecord], sourceOrder) => {
+    const normalizedStoredKey = normalizeStorageKey(storedKey);
+    const record = normalizePageTitleOverrideRecord(storedRecord, normalizedStoredKey);
+
+    if (!normalizedStoredKey || !record) {
+      return;
+    }
+
+    const isStructuredRecord = storedRecord && typeof storedRecord === 'object';
+    const pageKey = normalizePageKey(
+      isStructuredRecord ? normalizedStoredKey : (record.targetUrl || normalizedStoredKey)
+    );
+    if (!pageKey) {
+      return;
+    }
+
+    const current = overrides.get(pageKey);
+    const candidate = { ...record, sourceOrder };
+    if (!current || comparePageTitleOverrideRecords(candidate, current) > 0) {
+      overrides.set(pageKey, candidate);
+    }
+  });
+
+  return new Map(
+    [...overrides].map(([key, { sourceOrder, ...record }]) => [key, record])
+  );
+}
+
 export function normalizeCapturedTitleMap(value) {
   return new Map(
     [...normalizeCapturedTitleRecords(value)].map(([key, record]) => [key, record.title])
@@ -238,19 +365,6 @@ export function normalizeCapturedPageMap(value) {
         ...(record.resolvedUrl ? { resolvedUrl: record.resolvedUrl } : {})
       }
     ])
-  );
-}
-
-export function removeLegacyBatchTitleOverrides(value) {
-  const overrides = normalizeTitleOverrideMap(value);
-  const titleCounts = new Map();
-
-  for (const title of overrides.values()) {
-    titleCounts.set(title, (titleCounts.get(title) ?? 0) + 1);
-  }
-
-  return new Map(
-    [...overrides].filter(([, title]) => titleCounts.get(title) === 1)
   );
 }
 
@@ -282,10 +396,6 @@ async function loadRenameDrafts() {
   }
 
   return pruneRenameDrafts(drafts);
-}
-
-async function saveTitleOverrides(overrides) {
-  await setStorageValue(TITLE_OVERRIDES_STORAGE_KEY, Object.fromEntries(overrides));
 }
 
 async function saveGroupNameOverrides(overrides) {
@@ -338,7 +448,7 @@ function normalizeCapturedTitleRecords(value) {
   for (const [key, record] of entries) {
     const normalizedKey = normalizeStorageKey(key);
     const normalizedTitle = normalizeTitle(typeof record === 'string' ? record : record?.title);
-    const updatedAt = Number(record?.updatedAt);
+    const updatedAt = typeof record === 'string' ? 0 : Number(record?.updatedAt);
     const resolvedUrl = normalizeStorageKey(record?.resolvedUrl);
 
     if (normalizedKey && normalizedTitle && Number.isFinite(updatedAt)) {
@@ -351,6 +461,46 @@ function normalizeCapturedTitleRecords(value) {
   }
 
   return records;
+}
+
+function normalizePageTitleOverrideRecord(value, fallbackTargetUrl) {
+  const normalizedTitle = normalizeTitle(
+    typeof value === 'string' ? value : value?.title
+  );
+  const targetUrl = normalizeStorageKey(
+    typeof value === 'string' ? fallbackTargetUrl : (value?.targetUrl || fallbackTargetUrl)
+  );
+  const updatedAtValue = typeof value === 'string' ? 0 : Number(value?.updatedAt ?? 0);
+
+  if (!normalizedTitle || !targetUrl || !Number.isFinite(updatedAtValue)) {
+    return null;
+  }
+
+  return {
+    title: normalizedTitle,
+    targetUrl,
+    updatedAt: updatedAtValue
+  };
+}
+
+function comparePageTitleOverrideRecords(left, right) {
+  const byUpdatedAt = left.updatedAt - right.updatedAt;
+  return byUpdatedAt || left.sourceOrder - right.sourceOrder;
+}
+
+function serializePageTitleOverrides(overrides) {
+  return Object.fromEntries(
+    [...overrides].map(([key, record]) => [key, {
+      title: record.title,
+      targetUrl: record.targetUrl,
+      updatedAt: record.updatedAt
+    }])
+  );
+}
+
+function normalizePageKey(value) {
+  const normalizedValue = normalizeStorageKey(value);
+  return normalizedValue ? getPageIdentityKey(normalizedValue) : '';
 }
 
 function normalizeStorageKey(value) {
@@ -386,14 +536,34 @@ async function getStorageValue(key, fallbackValue) {
 }
 
 async function setStorageValue(key, value) {
+  await setStorageValues({ [key]: value });
+}
+
+async function setStorageValues(values) {
   const storageArea = getChromeStorageArea();
 
   if (storageArea) {
-    await chromeStorageSet(storageArea, { [key]: value });
+    await chromeStorageSet(storageArea, values);
     return;
   }
 
-  writeLegacyStorageValue(key, value);
+  for (const [key, value] of Object.entries(values)) {
+    writeLegacyStorageValue(key, value);
+  }
+}
+
+function withStorageMutationLock(callback) {
+  if (globalThis.navigator?.locks?.request) {
+    return globalThis.navigator.locks.request(
+      STORAGE_MUTATION_LOCK_NAME,
+      { mode: 'exclusive' },
+      callback
+    );
+  }
+
+  const task = storageMutationQueue.then(callback, callback);
+  storageMutationQueue = task.then(() => undefined, () => undefined);
+  return task;
 }
 
 function getChromeStorageArea() {

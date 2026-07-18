@@ -9,6 +9,7 @@ import {
   saveRenameDraft,
   saveTitleOverride
 } from './storage.js';
+import { createNavigationTracker } from './navigation-tracker.js';
 
 const RENAME_CURRENT_PAGE_COMMAND = 'rename-current-page';
 const RENAME_WINDOW_WIDTH = 480;
@@ -18,11 +19,25 @@ const INLINE_RENAME_INIT_MESSAGE = 'deduped-history:init-inline-rename';
 const INLINE_RENAME_SAVE_MESSAGE = 'deduped-history:save-inline-rename';
 const INLINE_RENAME_RESTORE_MESSAGE = 'deduped-history:restore-inline-rename';
 let capturedTitleWriteQueue = Promise.resolve();
+const navigationTracker = createNavigationTracker();
 
-globalThis.chrome?.tabs?.onUpdated?.addListener((_tabId, changeInfo, tab) => {
-  if (changeInfo?.title) {
-    enqueueCapturedTabTitle({ ...tab, title: changeInfo.title });
+globalThis.chrome?.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
+  const navigationUrls = navigationTracker.update(tabId, changeInfo, tab);
+  const hasPendingNavigation = Boolean(tab?.pendingUrl) && tab.pendingUrl !== tab.url;
+
+  if (
+    (changeInfo?.title && !hasPendingNavigation) ||
+    changeInfo?.status === 'complete' ||
+    (changeInfo?.url && tab?.status === 'complete')
+  ) {
+    enqueueCapturedTabTitle(
+      { ...tab, title: changeInfo?.title || tab?.title },
+      navigationUrls
+    );
   }
+});
+globalThis.chrome?.tabs?.onRemoved?.addListener((tabId) => {
+  navigationTracker.remove(tabId);
 });
 
 captureOpenTabTitles();
@@ -62,15 +77,19 @@ async function captureOpenTabTitles() {
   }
 }
 
-function enqueueCapturedTabTitle(tab) {
+function enqueueCapturedTabTitle(tab, navigationUrls = [tab?.url]) {
   if (!isCapturableTab(tab)) {
     return;
   }
 
-  const titleKey = getHistoryItemCapturedTitleKey({ url: tab.url });
-  capturedTitleWriteQueue = capturedTitleWriteQueue
-    .then(() => saveCapturedPageTitle(titleKey, tab.title, { resolvedUrl: tab.url }))
-    .catch(() => {});
+  const aliases = new Set([...navigationUrls, tab.url].filter(Boolean));
+
+  for (const url of aliases) {
+    const titleKey = getHistoryItemCapturedTitleKey({ url });
+    capturedTitleWriteQueue = capturedTitleWriteQueue
+      .then(() => saveCapturedPageTitle(titleKey, tab.title, { resolvedUrl: tab.url }))
+      .catch(() => {});
+  }
 }
 
 function isCapturableTab(tab) {
@@ -155,7 +174,9 @@ function sendMessageToTab(tabId, message) {
 }
 
 async function saveInlineRename(message) {
-  await saveTitleOverride(message?.titleOverrideKey, message?.title);
+  await saveTitleOverride(message?.titleOverrideKey, message?.title, {
+    targetUrl: message?.url
+  });
 }
 
 async function restoreInlineRename(message) {
@@ -280,13 +301,14 @@ async function createRenameDraft(tab) {
   const titleOverrideKey = getHistoryItemTitleOverrideKey({ url: tab.url });
   const titleOverrides = await loadTitleOverrides();
   const originalTitle = tab.title || tab.url;
-  const hasTitleOverride = titleOverrides.has(titleOverrideKey);
+  const titleOverride = titleOverrides.get(titleOverrideKey);
+  const hasTitleOverride = Boolean(titleOverride);
 
   return {
     id: createDraftId(),
     titleOverrideKey,
     url: tab.url,
-    currentTitle: titleOverrides.get(titleOverrideKey) || originalTitle,
+    currentTitle: titleOverride?.title || originalTitle,
     originalTitle,
     hasTitleOverride,
     createdAt: Date.now()

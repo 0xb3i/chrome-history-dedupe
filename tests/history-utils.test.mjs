@@ -80,7 +80,7 @@ test('normalized URL mode keeps a manually renamed redirect alias before visit c
   assert.equal(result.totalVisitCount, 21);
 });
 
-test('normalized URL mode keeps two manually renamed redirect aliases in one bucket', () => {
+test('normalized URL mode keeps only the latest manual rename in one redirect bucket', () => {
   const results = dedupeHistoryItems(
     applyTitleOverridesToItems(
       applyCapturedTitlesToItems(
@@ -119,14 +119,10 @@ test('normalized URL mode keeps two manually renamed redirect aliases in one buc
     'normalized-url'
   );
 
-  assert.deepEqual(
-    results.map((item) => item.id),
-    ['current-doc', 'legacy-doc']
-  );
-  assert.deepEqual(
-    results.map((item) => item.title),
-    ['Current Docs', 'Legacy Docs']
-  );
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, 'current-doc');
+  assert.equal(results[0].title, 'Current Docs');
+  assert.equal(results[0].totalVisitCount, 21);
 });
 
 test('two-stage dedupe merges one normalized URL before comparing page titles', () => {
@@ -241,8 +237,10 @@ test('page title mode collapses same live-title tabs of one stable resource', ()
 
   assert.equal(results.length, 1);
   assert.equal(results[0].id, 'older-high-count');
-  assert.match(results[0].dedupeKey, /mcp inspector/);
-  assert.match(results[0].dedupeKey, /4syx48fa/);
+  assert.equal(
+    results[0].dedupeKey,
+    'https://cloud-ttp-us.bytedance.net/tae/mcp_server/4syx48fa'
+  );
   assert.equal(results[0].dedupeCount, 2);
   assert.equal(results[0].totalVisitCount, 15);
 });
@@ -274,7 +272,7 @@ test('page title mode ignores page-state query variants on the same route', () =
         id: 'release-overview',
         identityTitle: '代码发布管理 US-TTP BDEE - 字节云',
         title: '代码发布管理 US-TTP BDEE - 字节云',
-        url: 'https://cloud.example.com/release-management?activeTab=overview&from=recent',
+        url: 'https://cloud.example.com/release-management?activeTab=overview&view=summary',
         visitCount: 2
       },
       {
@@ -293,7 +291,7 @@ test('page title mode ignores page-state query variants on the same route', () =
   assert.equal(results[0].totalVisitCount, 5);
 });
 
-test('page title mode keeps a renamed route variant before the higher-visit sibling', () => {
+test('page family mode merges non-resource query variants and keeps a manual rename', () => {
   const url1 =
     'https://cloud-ttp-us.bytedance.net/tcc/namespace/bytedance.mcp.ecom_affiliate_tools?by_key=false&condition=name&configId=&dir_path=all_dir&env=ppe_product_selection_niubei&filter_empty_dir=false&filter_no_tag=false&keyword=&order=&pn=1&region=all_region&release_operator=&release_status=&rn=20&scope=all&source=&tab=';
   const url2 =
@@ -321,15 +319,15 @@ test('page title mode keeps a renamed route variant before the higher-visit sibl
     new Map([[normalizeHistoryKey({ url: url1 }, 'normalized-url'), 'TCC PPE 配置']])
   );
   const urlDedupedItems = dedupeHistoryItems(items, 'normalized-url');
-  const [result] = dedupeHistoryItems(urlDedupedItems, 'page-title');
+  const [result] = dedupeHistoryItems(urlDedupedItems, 'page-family');
 
   assert.equal(result.id, 'ppe');
   assert.equal(result.title, 'TCC PPE 配置');
-  assert.equal(result.url, url1);
   assert.equal(result.totalVisitCount, 21);
+  assert.equal(result.dedupeCount, 2);
 });
 
-test('page title mode keeps two renamed route variants in one bucket', () => {
+test('page family mode keeps only the latest rename after query variants merge', () => {
   const url1 =
     'https://cloud-ttp-us.bytedance.net/tcc/namespace/bytedance.mcp.ecom_affiliate_tools?by_key=false&condition=name&configId=&dir_path=all_dir&env=ppe_product_selection_niubei&filter_empty_dir=false&filter_no_tag=false&keyword=&order=&pn=1&region=all_region&release_operator=&release_status=&rn=20&scope=all&source=&tab=';
   const url2 =
@@ -355,21 +353,25 @@ test('page title mode keeps two renamed route variants in one bucket', () => {
       }
     ],
     new Map([
-      [normalizeHistoryKey({ url: url1 }, 'normalized-url'), 'TCC PPE 配置'],
-      [normalizeHistoryKey({ url: url2 }, 'normalized-url'), 'TCC Prod 配置']
+      [normalizeHistoryKey({ url: url1 }, 'normalized-url'), {
+        title: 'TCC PPE 配置',
+        targetUrl: url1,
+        updatedAt: 100
+      }],
+      [normalizeHistoryKey({ url: url2 }, 'normalized-url'), {
+        title: 'TCC Prod 配置',
+        targetUrl: url2,
+        updatedAt: 200
+      }]
     ])
   );
   const urlDedupedItems = dedupeHistoryItems(items, 'normalized-url');
-  const results = dedupeHistoryItems(urlDedupedItems, 'page-title');
+  const [result] = dedupeHistoryItems(urlDedupedItems, 'page-family');
 
-  assert.deepEqual(
-    results.map((item) => item.id),
-    ['prod', 'ppe']
-  );
-  assert.deepEqual(
-    results.map((item) => item.title),
-    ['TCC Prod 配置', 'TCC PPE 配置']
-  );
+  assert.equal(result.id, 'prod');
+  assert.equal(result.title, 'TCC Prod 配置');
+  assert.equal(result.isTitleRenamed, true);
+  assert.equal(result.totalVisitCount, 21);
 });
 
 test('stale history titles never affect display search or cross-URL dedupe', () => {
@@ -438,11 +440,460 @@ test('page title mode ignores zero-width characters in titles', () => {
 
   assert.equal(results.length, 1);
   assert.equal(results[0].id, 'zero-width-title');
-  assert.match(
+  assert.equal(
     results[0].dedupeKey,
-    /^联盟搜索 & agent 周报 20260603 - 20260609 - 飞书云文档\n/
+    'https://bytedance.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb'
   );
-  assert.match(results[0].dedupeKey, /FkjVwUDZciqChskTeQcc2ATjnQb/);
+});
+
+test('page family identity ignores changing tab titles and keeps a manual rename', () => {
+  const pageKey = 'https://example.com/projects/prj12345';
+  const items = applyTitleOverridesToItems(
+    [
+      {
+        id: 'overview',
+        identityTitle: 'Project Overview',
+        title: 'Project Overview',
+        url: `${pageKey}/overview`,
+        lastVisitTime: 300,
+        visitCount: 20
+      },
+      {
+        id: 'settings',
+        identityTitle: 'Project Settings',
+        title: 'Project Settings',
+        url: `${pageKey}/settings`,
+        lastVisitTime: 100,
+        visitCount: 1
+      }
+    ],
+    new Map([[pageKey, {
+      title: '核心项目',
+      targetUrl: `${pageKey}/settings`,
+      updatedAt: 200
+    }]])
+  );
+  const renamedItems = items.filter((item) => item.isTitleRenamed);
+  const [result] = dedupeHistoryItems(items, 'page-family');
+
+  assert.deepEqual(renamedItems.map((item) => item.id), ['settings']);
+  assert.equal(result.id, 'settings');
+  assert.equal(result.title, '核心项目');
+  assert.equal(result.totalVisitCount, 21);
+  assert.equal(result.lastVisitTime, 300);
+});
+
+test('page family identity uses the deepest resource id instead of merging child resources', () => {
+  const taskA = normalizeHistoryKey({
+    url: 'https://example.com/projects/prj12345/tasks/task0001/overview'
+  }, 'page-family');
+  const taskB = normalizeHistoryKey({
+    url: 'https://example.com/projects/prj12345/tasks/task0002/settings'
+  }, 'page-family');
+
+  assert.equal(taskA, 'https://example.com/projects/prj12345/tasks/task0001');
+  assert.equal(taskB, 'https://example.com/projects/prj12345/tasks/task0002');
+  assert.notEqual(taskA, taskB);
+});
+
+test('resource identity preserves unknown non-tab suffixes', () => {
+  const alice = normalizeHistoryKey({
+    url: 'https://example.com/projects/prj12345/members/alice'
+  }, 'page-family');
+  const bob = normalizeHistoryKey({
+    url: 'https://example.com/projects/prj12345/members/bob'
+  }, 'page-family');
+
+  assert.equal(alice, 'https://example.com/projects/prj12345/members/alice');
+  assert.equal(bob, 'https://example.com/projects/prj12345/members/bob');
+  assert.notEqual(alice, bob);
+});
+
+test('page family identity ignores all non-resource query parameters', () => {
+  const tabA = normalizeHistoryKey({
+    url: 'https://example.com/report?query=alpha&activeTab=summary&timestamp=100'
+  }, 'page-family');
+  const tabB = normalizeHistoryKey({
+    url: 'https://example.com/report?query=alpha&activeTab=details&timestamp=200'
+  }, 'page-family');
+  const otherContent = normalizeHistoryKey({
+    url: 'https://example.com/report?query=beta&activeTab=summary'
+  }, 'page-family');
+
+  assert.equal(tabA, 'https://example.com/report');
+  assert.equal(tabA, tabB);
+  assert.equal(tabA, otherContent);
+});
+
+test('Dorado instance query variants collapse and keep the preferred representative', () => {
+  const baseUrl = 'https://dataleap-va.tiktok-row.net/dorado/instance';
+  const projectUrl =
+    `${baseUrl}?_instanceD_=project%253Di18n_1867%2526id%253D109477584%2526tab%253Doverview`;
+  const searchUrl =
+    `${baseUrl}?searchType=content&keyword=109477584&schedule=2026-07-16&tab=runtime`;
+  const popularUrl =
+    `${baseUrl}?_instanceD_=project%253Di18n_1867%2526id%253D109477584%2526tab%253Dmonitor`;
+  const rawItems = [
+    {
+      id: 'project-overview',
+      title: '实例运维 - Dorado',
+      url: projectUrl,
+      lastVisitTime: 200,
+      visitCount: 3
+    },
+    {
+      id: 'search-transition',
+      title: searchUrl,
+      url: searchUrl,
+      lastVisitTime: 300,
+      visitCount: 1
+    },
+    {
+      id: 'popular-monitor',
+      title: '实例运维 - Dorado',
+      url: popularUrl,
+      lastVisitTime: 100,
+      visitCount: 8
+    }
+  ];
+
+  assert.deepEqual(
+    rawItems.map((item) => normalizeHistoryKey(item, 'page-family')),
+    [baseUrl, baseUrl, baseUrl]
+  );
+
+  const [popular] = dedupeHistoryItems(
+    dedupeHistoryItems(rawItems, 'normalized-url'),
+    'page-family'
+  );
+  assert.equal(popular.id, 'popular-monitor');
+  assert.equal(popular.totalVisitCount, 12);
+  assert.equal(popular.dedupeCount, 3);
+  assert.deepEqual(
+    filterHistoryItemsByQuery([popular], 'dorado/instance?searchType=content')
+      .map((item) => item.id),
+    ['popular-monitor']
+  );
+
+  const renamedItems = applyTitleOverridesToItems(
+    rawItems,
+    new Map([[baseUrl, {
+      title: '我的实例运维',
+      targetUrl: searchUrl,
+      updatedAt: 500
+    }]])
+  );
+  const [renamed] = dedupeHistoryItems(
+    dedupeHistoryItems(renamedItems, 'normalized-url'),
+    'page-family'
+  );
+  assert.equal(renamed.id, 'search-transition');
+  assert.equal(renamed.title, '我的实例运维');
+  assert.equal(renamed.totalVisitCount, 12);
+  assert.equal(renamed.dedupeCount, 3);
+});
+
+test('page family identity preserves only canonical resource ID query parameters', () => {
+  const taskA = normalizeHistoryKey({
+    url: 'https://example.com/detail?taskId=123456&filter=failed&tabId=logs'
+  }, 'page-family');
+  const taskB = normalizeHistoryKey({
+    url: 'https://example.com/detail?task_id=123456&filter=success&env=prod'
+  }, 'page-family');
+  const taskC = normalizeHistoryKey({
+    url: 'https://example.com/detail?task-id=654321&filter=failed'
+  }, 'page-family');
+  const qualifiedCamel = normalizeHistoryKey({
+    url: 'https://example.com/detail?qualifiedName=HiveTable%3A%2F%2F%2Forders&tab=schema'
+  }, 'page-family');
+  const qualifiedSnake = normalizeHistoryKey({
+    url: 'https://example.com/detail?qualified_name=HiveTable%3A%2F%2F%2Forders&tab=lineage'
+  }, 'page-family');
+  const otherQualifiedName = normalizeHistoryKey({
+    url: 'https://example.com/detail?qualifiedName=HiveTable%3A%2F%2F%2Fusers'
+  }, 'page-family');
+
+  assert.equal(taskA, 'https://example.com/detail?task_id=123456');
+  assert.equal(taskA, taskB);
+  assert.notEqual(taskA, taskC);
+  assert.equal(qualifiedCamel, qualifiedSnake);
+  assert.notEqual(qualifiedCamel, otherQualifiedName);
+});
+
+test('keyword search route treats all search parameters as one page state', () => {
+  const baseUrl = 'https://cloud.example.com/argos/streamlog/info_overview/keyword_search';
+  const first = normalizeHistoryKey({
+    url: `${baseUrl}?auto_search=false&data_source=service_a&keyword=timeout`
+  }, 'page-family');
+  const second = normalizeHistoryKey({
+    url: `${baseUrl}?auto_search=true&data_source=service_b&keyword=panic&region=us`
+  }, 'page-family');
+  const resourceShaped = normalizeHistoryKey({
+    url: `${baseUrl}?task_id=123456&keyword=rpc`
+  }, 'page-family');
+
+  assert.equal(first, baseUrl);
+  assert.equal(second, baseUrl);
+  assert.equal(resourceShaped, baseUrl);
+  assert.equal(
+    normalizeHistoryKey({
+      url: 'https://cloud.example.com/#/argos/keyword_search?keyword=panic&task_id=123456'
+    }, 'page-family'),
+    'https://cloud.example.com/#/argos/keyword_search'
+  );
+  assert.equal(
+    normalizeHistoryKey({
+      url: 'https://cloud.example.com/argos/keyword_searching?keyword=panic'
+    }, 'page-family'),
+    'https://cloud.example.com/argos/keyword_searching'
+  );
+  assert.notEqual(
+    normalizeHistoryKey({
+      url: 'https://cloud.example.com/argos/keyword_search/result?task_id=123456'
+    }, 'page-family'),
+    'https://cloud.example.com/argos/keyword_search/result'
+  );
+});
+
+test('resource paths ignore non-resource query context', () => {
+  const prod = normalizeHistoryKey({
+    url: 'https://example.com/projects/prj12345/overview?env=prod&activeTab=logs&from=recent'
+  }, 'page-family');
+  const ppe = normalizeHistoryKey({
+    url: 'https://example.com/projects/prj12345/settings?env=ppe&activeTab=config'
+  }, 'page-family');
+
+  assert.equal(prod, 'https://example.com/projects/prj12345');
+  assert.equal(ppe, 'https://example.com/projects/prj12345');
+  assert.equal(prod, ppe);
+});
+
+test('keyword search variants keep only the renamed representative', () => {
+  const baseUrl = 'https://cloud.example.com/argos/streamlog/info_overview/keyword_search';
+  const items = applyTitleOverridesToItems(
+    [
+      {
+        id: 'renamed',
+        title: '日志关键字检索 | Argos-US-TTP',
+        url: `${baseUrl}?keyword=timeout&data_source=service_a`,
+        lastVisitTime: 100,
+        visitCount: 1
+      },
+      {
+        id: 'popular',
+        title: '日志关键字检索 | Argos-US-TTP',
+        url: `${baseUrl}?keyword=panic&data_source=service_b`,
+        lastVisitTime: 300,
+        visitCount: 20
+      },
+      {
+        id: 'recent',
+        title: '日志关键字检索 | Argos-US-TTP',
+        url: `${baseUrl}?keyword=rpc&region=us`,
+        lastVisitTime: 500,
+        visitCount: 3
+      }
+    ],
+    new Map([[baseUrl, {
+      title: 'Argos 日志',
+      targetUrl: `${baseUrl}?keyword=timeout&data_source=service_a`,
+      updatedAt: 200
+    }]])
+  );
+  const [result] = dedupeHistoryItems(items, 'page-family');
+
+  assert.equal(result.id, 'renamed');
+  assert.equal(result.title, 'Argos 日志');
+  assert.equal(result.totalVisitCount, 24);
+  assert.equal(result.dedupeCount, 3);
+  assert.equal(result.lastVisitTime, 500);
+});
+
+test('normal anchors merge while hash-router resources remain distinct', () => {
+  assert.equal(
+    normalizeHistoryKey({ url: 'https://example.com/docs#comments' }, 'page-family'),
+    normalizeHistoryKey({ url: 'https://example.com/docs#top' }, 'page-family')
+  );
+  assert.notEqual(
+    normalizeHistoryKey({ url: 'https://example.com/#/docs/doc0001/overview' }, 'page-family'),
+    normalizeHistoryKey({ url: 'https://example.com/#/docs/doc0002/overview' }, 'page-family')
+  );
+  assert.equal(
+    normalizeHistoryKey({ url: 'https://example.com/#/docs/doc0001/overview' }, 'page-family'),
+    normalizeHistoryKey({ url: 'https://example.com/#/docs/doc0001/settings' }, 'page-family')
+  );
+});
+
+test('hash routes ignore shell and route state query while preserving resource IDs', () => {
+  const reportA = normalizeHistoryKey({
+    url: 'https://example.com/?theme=dark#/reports?query=alpha&tab=summary'
+  }, 'page-family');
+  const reportB = normalizeHistoryKey({
+    url: 'https://example.com/?theme=light#/reports?query=beta&tab=details'
+  }, 'page-family');
+  const taskA = normalizeHistoryKey({
+    url: 'https://example.com/?source=mail#/detail?taskId=123456&filter=failed'
+  }, 'page-family');
+  const taskB = normalizeHistoryKey({
+    url: 'https://example.com/?source=chat#/detail?task_id=123456&filter=success'
+  }, 'page-family');
+  const taskC = normalizeHistoryKey({
+    url: 'https://example.com/#/detail?task_id=654321&filter=failed'
+  }, 'page-family');
+
+  assert.equal(reportA, 'https://example.com/#/reports');
+  assert.equal(reportA, reportB);
+  assert.equal(taskA, 'https://example.com/#/detail?task_id=123456');
+  assert.equal(taskA, taskB);
+  assert.notEqual(taskA, taskC);
+});
+
+test('local files and date paths never use resource-id heuristics', () => {
+  const fileA = normalizeHistoryKey({
+    url: 'file:///tmp/20260718/report-a.html'
+  }, 'page-family');
+  const fileB = normalizeHistoryKey({
+    url: 'file:///tmp/20260718/report-b.html'
+  }, 'page-family');
+  const newsA = normalizeHistoryKey({
+    url: 'https://news.example.com/20260718/article-a'
+  }, 'page-family');
+  const newsB = normalizeHistoryKey({
+    url: 'https://news.example.com/20260718/article-b'
+  }, 'page-family');
+
+  assert.equal(fileA, 'file:///tmp/20260718/report-a.html');
+  assert.equal(fileB, 'file:///tmp/20260718/report-b.html');
+  assert.notEqual(fileA, fileB);
+  assert.equal(newsA, 'https://news.example.com/20260718/article-a');
+  assert.equal(newsB, 'https://news.example.com/20260718/article-b');
+  assert.notEqual(newsA, newsB);
+});
+
+test('dedupe adds existing bucket metadata and selects the largest normalized URL bucket', () => {
+  const [result] = dedupeHistoryItems([
+    {
+      id: 'small-newer',
+      url: 'https://example.com/docs/doc0001/overview',
+      lastVisitTime: 500,
+      visitCount: 2,
+      totalVisitCount: 2,
+      dedupeCount: 2
+    },
+    {
+      id: 'large-older',
+      url: 'https://example.com/docs/doc0001/settings',
+      lastVisitTime: 100,
+      visitCount: 1,
+      totalVisitCount: 9,
+      representativeVisitCount: 9,
+      dedupeCount: 3
+    }
+  ], 'page-family');
+
+  assert.equal(result.id, 'large-older');
+  assert.equal(result.totalVisitCount, 11);
+  assert.equal(result.dedupeCount, 5);
+  assert.equal(result.lastVisitTime, 500);
+});
+
+test('two-stage dedupe chooses the tab with the largest aggregated normalized-URL count', () => {
+  const normalizedItems = dedupeHistoryItems([
+    {
+      id: 'overview-mail',
+      url: 'https://example.com/projects/prj12345/overview?utm_source=mail',
+      lastVisitTime: 100,
+      visitCount: 6
+    },
+    {
+      id: 'overview-chat',
+      url: 'https://example.com/projects/prj12345/overview?utm_source=chat',
+      lastVisitTime: 200,
+      visitCount: 6
+    },
+    {
+      id: 'settings',
+      url: 'https://example.com/projects/prj12345/settings',
+      lastVisitTime: 300,
+      visitCount: 10
+    }
+  ], 'normalized-url');
+  const [result] = dedupeHistoryItems(normalizedItems, 'page-family');
+
+  assert.equal(result.id, 'overview-chat');
+  assert.equal(result.representativeVisitCount, 12);
+  assert.equal(result.totalVisitCount, 22);
+  assert.equal(result.dedupeCount, 3);
+});
+
+test('reliable window counts outrank failed all-time fallbacks and mark totals as lower bounds', () => {
+  const [result] = dedupeHistoryItems([
+    {
+      id: 'failed-popular',
+      url: 'https://example.com/projects/prj12345/settings',
+      lastVisitTime: 300,
+      visitCount: 0,
+      allTimeVisitCount: 100,
+      visitCountReliable: false
+    },
+    {
+      id: 'reliable',
+      url: 'https://example.com/projects/prj12345/overview',
+      lastVisitTime: 100,
+      visitCount: 2,
+      visitCountReliable: true
+    }
+  ], 'page-family');
+
+  assert.equal(result.id, 'reliable');
+  assert.equal(result.totalVisitCount, 2);
+  assert.equal(result.totalVisitCountReliable, false);
+});
+
+test('dedupe representative is deterministic when normalized URL scores tie', () => {
+  const items = [
+    {
+      id: 'mail',
+      title: 'Mail entry',
+      url: 'https://example.com/docs?utm_source=mail',
+      lastVisitTime: 100,
+      visitCount: 1
+    },
+    {
+      id: 'recent',
+      title: 'Recent entry',
+      url: 'https://example.com/docs?utm_source=recent',
+      lastVisitTime: 100,
+      visitCount: 1
+    }
+  ];
+  const forward = dedupeHistoryItems(items, 'normalized-url')[0];
+  const reversed = dedupeHistoryItems([...items].reverse(), 'normalized-url')[0];
+
+  assert.equal(forward.id, reversed.id);
+  assert.equal(forward.url, reversed.url);
+});
+
+test('query matching a non-representative tab still returns the stable family representative', () => {
+  const [family] = dedupeHistoryItems([
+    {
+      id: 'popular',
+      title: 'Project Overview',
+      url: 'https://example.com/projects/prj12345/overview',
+      visitCount: 20
+    },
+    {
+      id: 'rare',
+      title: 'Audit Timeline',
+      url: 'https://example.com/projects/prj12345/audit',
+      visitCount: 1
+    }
+  ], 'page-family');
+
+  assert.equal(family.id, 'popular');
+  assert.deepEqual(filterHistoryItemsByQuery([family], 'Audit Timeline').map((item) => item.id), [
+    'popular'
+  ]);
 });
 
 test('minimal service mode merges tab-like pages under the same resource id', () => {
@@ -504,7 +955,7 @@ test('minimal service mode prefers a renamed item within a merged service bucket
   assert.equal(results[0].totalVisitCount, 21);
 });
 
-test('minimal service mode keeps ordinary query variants distinct when no resource id is visible', () => {
+test('minimal service mode merges ordinary query variants by path', () => {
   const results = dedupeHistoryItems(
     [
       {
@@ -525,7 +976,9 @@ test('minimal service mode keeps ordinary query variants distinct when no resour
     'minimal-service'
   );
 
-  assert.equal(results.length, 2);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, 'search-a');
+  assert.equal(results[0].totalVisitCount, 2);
 });
 
 test('minimal service mode keeps root resource query URLs valid', () => {
@@ -693,7 +1146,7 @@ test('pin keys normalize URLs so tracking variants share the same pin', () => {
     url: 'https://example.com/docs/?utm_source=mail&b=2#section'
   });
 
-  assert.equal(key, 'https://example.com/docs?b=2');
+  assert.equal(key, 'https://example.com/docs');
 });
 
 test('title override keys normalize URLs so tracking variants share one custom title', () => {
@@ -701,7 +1154,7 @@ test('title override keys normalize URLs so tracking variants share one custom t
     url: 'https://example.com/docs/?utm_source=mail&b=2#section'
   });
 
-  assert.equal(key, 'https://example.com/docs?b=2');
+  assert.equal(key, 'https://example.com/docs');
 });
 
 test('captured live titles replace stale history titles before manual overrides', () => {
@@ -744,6 +1197,30 @@ test('captured redirect targets dedupe different history aliases of one final pa
 
   assert.equal(results.length, 1);
   assert.equal(results[0].dedupeCount, 2);
+});
+
+test('unsafe legacy first-id capture never redirects distinct nested resources together', () => {
+  const legacyKey = 'https://example.com/projects/prj12345';
+  const items = applyCapturedTitlesToItems(
+    [
+      {
+        id: 'task-a',
+        url: 'https://example.com/projects/prj12345/tasks/task0001/overview'
+      },
+      {
+        id: 'task-b',
+        url: 'https://example.com/projects/prj12345/tasks/task0002/overview'
+      }
+    ],
+    new Map([[legacyKey, {
+      title: 'Legacy task title',
+      resolvedUrl: 'https://example.com/projects/prj12345/tasks/task0001/overview'
+    }]])
+  );
+
+  assert.equal(items[0].dedupeUrl, undefined);
+  assert.equal(items[1].dedupeUrl, undefined);
+  assert.equal(dedupeHistoryItems(items, 'page-family').length, 2);
 });
 
 test('display titles remove invisible Unicode format controls that shift text alignment', () => {
@@ -853,8 +1330,7 @@ test('page title dedupe keeps tab variants of one resource together', () => {
   );
 
   assert.deepEqual(result.titleOverrideKeys, [
-    'https://example.com/docs/abc12345/overview',
-    'https://example.com/docs/abc12345/settings'
+    'https://example.com/docs/abc12345'
   ]);
 });
 
@@ -945,6 +1421,34 @@ test('pinned pages move to the top of their group and support multiple pins', ()
     [true, true, false, false]
   );
   assert.equal(pinnedGroups[0].pinnedCount, 2);
+});
+
+test('a legacy redirect alias remains pinned after the final URL becomes representative', () => {
+  const [item] = dedupeHistoryItems(
+    applyCapturedTitlesToItems(
+      [{
+        id: 'legacy',
+        title: 'Docs',
+        url: 'https://example.com/legacy-doc',
+        visitCount: 3
+      }],
+      new Map([['https://example.com/legacy-doc', {
+        title: 'Docs',
+        resolvedUrl: 'https://example.com/final-doc'
+      }]])
+    ),
+    'page-family'
+  );
+  const [group] = applyPinnedStateToGroups(
+    groupHistoryItems([item]),
+    new Set(['https://example.com/legacy-doc'])
+  );
+
+  assert.equal(group.items[0].isPinned, true);
+  assert.deepEqual(group.items[0].pinKeys, [
+    'https://example.com/final-doc',
+    'https://example.com/legacy-doc'
+  ]);
 });
 
 test('pinned pages follow the order they were pinned instead of visit time or URL', () => {

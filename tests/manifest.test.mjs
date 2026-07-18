@@ -3,6 +3,12 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
+const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+
+test('manifest and package expose the same user-visible version', () => {
+  assert.equal(manifest.version, packageJson.version);
+  assert.equal(manifest.version, '0.3.2');
+});
 
 test('browser action opens the popup page', () => {
   assert.equal(manifest.action.default_popup, 'popup.html');

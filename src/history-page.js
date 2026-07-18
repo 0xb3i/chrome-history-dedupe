@@ -12,6 +12,9 @@ import {
   groupHistoryItems
 } from './history-utils.js';
 import {
+  createHistorySnapshotLoader
+} from './history-data.js';
+import {
   CAPTURED_PAGE_TITLES_STORAGE_KEY,
   deleteGroupNameOverride,
   deleteTitleOverrides,
@@ -22,20 +25,22 @@ import {
   loadPinnedUrlKeys,
   loadTitleOverrides,
   normalizeCapturedPageMap,
-  normalizeStringSet,
+  normalizePageTitleOverrideMap,
+  normalizePinnedPageKeys,
   normalizeTitleOverrideMap,
   PINNED_URLS_STORAGE_KEY,
   saveGroupNameOverride,
   saveLastSearchState,
-  savePinnedUrlKeys,
   saveTitleOverride,
+  togglePinnedUrlKey,
   TITLE_OVERRIDES_STORAGE_KEY
 } from './storage.js';
 
-const DEDUPE_MODE = 'page-title';
-const MAX_RESULTS = 10000;
-const VISIT_COUNT_CONCURRENCY = 32;
+const DEDUPE_MODE = 'page-family';
+const SNAPSHOT_RENDER_DEBOUNCE_MS = 50;
+const SNAPSHOT_REUSE_MS = 30 * 1000;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const historySnapshotLoader = createHistorySnapshotLoader();
 
 const form = document.querySelector('#search-form');
 const queryInput = document.querySelector('#query');
@@ -61,6 +66,10 @@ let groupRenameDialogGroup = null;
 let showRenamedOnly = false;
 let showMinimalMode = false;
 let latestSearchRequestId = 0;
+let historySnapshot = [];
+let historySnapshotLoadedAt = 0;
+let historySnapshotRange = '';
+let snapshotRenderTimer = null;
 
 const currentYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   month: 'long',
@@ -74,7 +83,7 @@ const otherYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
 });
 form.addEventListener('submit', (event) => {
   event.preventDefault();
-  runSearch();
+  searchOrRenderSnapshot();
 });
 setupRangeSelect();
 shortcutSettingsButton?.addEventListener('click', () => {
@@ -125,52 +134,92 @@ async function init() {
 
 async function runSearch() {
   const searchRequestId = ++latestSearchRequestId;
-  const query = queryInput.value.trim();
+  const requestedRange = rangeSelect.value;
 
   setLoading();
 
   try {
     await rememberCurrentSearchState();
-    const startTime = getStartTime(rangeSelect.value);
-    const endTime = Date.now();
-    const rawItems = await searchChromeHistory({
-      text: '',
-      startTime,
-      endTime,
-      maxResults: MAX_RESULTS
-    });
-    const itemsWithWindowVisitCounts = await applyVisitCountsForWindow(rawItems, startTime, endTime);
-    const capturedTitleItems = applyCapturedTitlesToItems(itemsWithWindowVisitCounts, capturedPageTitles);
-    const renamedItems = applyTitleOverridesToItems(capturedTitleItems, titleOverrides);
-    const matchedItems = filterHistoryItemsByQuery(renamedItems, query);
-    const visibleItems = showRenamedOnly
-      ? matchedItems.filter((item) => item.isTitleRenamed)
-      : matchedItems;
-    const urlDedupedItems = dedupeHistoryItems(visibleItems, 'normalized-url');
-    const titleDedupedItems = dedupeHistoryItems(urlDedupedItems, DEDUPE_MODE);
-    const dedupedItems = titleDedupedItems;
-    const groupedItems = applyGroupNameOverridesToGroups(groupHistoryItems(dedupedItems, 'domain'));
+    const itemsWithWindowVisitCounts = await loadHistorySnapshot(requestedRange);
 
     if (!isLatestSearchRequest(searchRequestId)) {
       return;
     }
 
-    currentGroups = showRenamedOnly ? [] : groupedItems;
-    currentFlatItems = showRenamedOnly ? sortItemsByDisplayName(dedupedItems) : [];
-    renderSummary(matchedItems.length, dedupedItems.length, groupedItems.length);
-    if (showRenamedOnly) {
-      renderFlatResults(applyPinnedStateToItems(currentFlatItems, pinnedUrlKeys));
-    } else {
-      renderResults(applyPinnedStateToGroups(groupedItems, pinnedUrlKeys), {
-        expandAll: Boolean(query)
-      });
-    }
-    setStatus(showRenamedOnly ? `${dedupedItems.length} 条已重命名` : `${dedupedItems.length} 条`);
+    historySnapshot = itemsWithWindowVisitCounts;
+    historySnapshotLoadedAt = Date.now();
+    historySnapshotRange = requestedRange;
+    renderHistorySnapshot();
   } catch (error) {
     if (isLatestSearchRequest(searchRequestId)) {
       renderError(error);
     }
   }
+}
+
+function searchOrRenderSnapshot() {
+  const snapshotIsFresh = historySnapshotRange === rangeSelect.value &&
+    Date.now() - historySnapshotLoadedAt <= SNAPSHOT_REUSE_MS;
+
+  if (!snapshotIsFresh) {
+    runSearch();
+    return;
+  }
+
+  latestSearchRequestId += 1;
+  void rememberCurrentSearchState();
+  renderHistorySnapshot();
+}
+
+function loadHistorySnapshot(range) {
+  return historySnapshotLoader.load(range, getStartTime(range));
+}
+
+function renderHistorySnapshot() {
+  if (snapshotRenderTimer !== null) {
+    clearTimeout(snapshotRenderTimer);
+    snapshotRenderTimer = null;
+  }
+
+  const query = queryInput.value.trim();
+  const capturedTitleItems = applyCapturedTitlesToItems(historySnapshot, capturedPageTitles);
+  const renamedItems = applyTitleOverridesToItems(capturedTitleItems, titleOverrides);
+  const urlItems = dedupeHistoryItems(renamedItems, 'normalized-url');
+  const pageItems = dedupeHistoryItems(urlItems, DEDUPE_MODE);
+  const matchedItems = filterHistoryItemsByQuery(pageItems, query);
+  const visibleItems = showRenamedOnly
+    ? matchedItems.filter((item) => item.isTitleRenamed)
+    : matchedItems;
+  const groupedItems = applyGroupNameOverridesToGroups(groupHistoryItems(visibleItems, 'domain'));
+
+  currentGroups = showRenamedOnly ? [] : groupedItems;
+  currentFlatItems = showRenamedOnly ? sortItemsByDisplayName(visibleItems) : [];
+  renderSummary(pageItems.length, visibleItems.length, groupedItems.length);
+
+  if (showRenamedOnly) {
+    renderFlatResults(applyPinnedStateToItems(currentFlatItems, pinnedUrlKeys));
+  } else {
+    renderResults(applyPinnedStateToGroups(groupedItems, pinnedUrlKeys), {
+      expandAll: Boolean(query)
+    });
+  }
+
+  setStatus(showRenamedOnly ? `${visibleItems.length} 条已重命名` : `${visibleItems.length} 条`);
+}
+
+function scheduleSnapshotRender() {
+  if (!historySnapshotLoadedAt) {
+    return;
+  }
+
+  if (snapshotRenderTimer !== null) {
+    clearTimeout(snapshotRenderTimer);
+  }
+
+  snapshotRenderTimer = setTimeout(() => {
+    snapshotRenderTimer = null;
+    renderHistorySnapshot();
+  }, SNAPSHOT_RENDER_DEBOUNCE_MS);
 }
 
 function isLatestSearchRequest(searchRequestId) {
@@ -247,6 +296,19 @@ function setupRangeSelect() {
       closeRangeSelect();
       button.focus();
     });
+    option.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        focusRelativeRangeOption(option, event.key === 'ArrowDown' ? 1 : -1);
+      } else if (event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        focusBoundaryRangeOption(event.key === 'Home' ? 'first' : 'last');
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        closeRangeSelect();
+        button.focus();
+      }
+    });
     menu.append(option);
     return option;
   });
@@ -263,6 +325,15 @@ function setupRangeSelect() {
     } else {
       closeRangeSelect();
     }
+  });
+  button.addEventListener('keydown', (event) => {
+    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
+      return;
+    }
+
+    event.preventDefault();
+    openRangeSelect();
+    focusSelectedRangeOption(event.key === 'ArrowDown' ? 1 : -1);
   });
   document.addEventListener('click', (event) => {
     if (!wrapper.contains(event.target)) {
@@ -311,6 +382,40 @@ function syncRangeSelect() {
   }
 }
 
+function focusSelectedRangeOption(direction) {
+  if (!rangeDropdown) {
+    return;
+  }
+
+  const selectedIndex = rangeDropdown.options.findIndex(
+    (option) => option.dataset.value === rangeSelect.value
+  );
+  const fallbackIndex = direction > 0 ? 0 : rangeDropdown.options.length - 1;
+  rangeDropdown.options[selectedIndex >= 0 ? selectedIndex : fallbackIndex]?.focus();
+}
+
+function focusRelativeRangeOption(currentOption, direction) {
+  if (!rangeDropdown) {
+    return;
+  }
+
+  const currentIndex = rangeDropdown.options.indexOf(currentOption);
+  const nextIndex = Math.min(
+    rangeDropdown.options.length - 1,
+    Math.max(0, currentIndex + direction)
+  );
+  rangeDropdown.options[nextIndex]?.focus();
+}
+
+function focusBoundaryRangeOption(boundary) {
+  if (!rangeDropdown) {
+    return;
+  }
+
+  const index = boundary === 'first' ? 0 : rangeDropdown.options.length - 1;
+  rangeDropdown.options[index]?.focus();
+}
+
 async function rememberCurrentSearchState() {
   try {
     await saveLastSearchState({
@@ -322,85 +427,6 @@ async function rememberCurrentSearchState() {
   } catch {
     // Remembering the last search is helpful, but it should never block searching.
   }
-}
-
-function searchChromeHistory(query) {
-  return new Promise((resolve, reject) => {
-    if (!globalThis.chrome?.history?.search) {
-      reject(new Error('Chrome history API unavailable'));
-      return;
-    }
-
-    chrome.history.search(query, (items) => {
-      const lastError = chrome.runtime?.lastError;
-
-      if (lastError) {
-        reject(new Error(lastError.message));
-        return;
-      }
-
-      resolve(items ?? []);
-    });
-  });
-}
-
-async function applyVisitCountsForWindow(items, startTime, endTime) {
-  if (startTime <= 0 || !globalThis.chrome?.history?.getVisits) {
-    return items;
-  }
-
-  return mapWithConcurrency(items, VISIT_COUNT_CONCURRENCY, async (item) => {
-    const windowVisitCount = await getVisitCountForWindow(item.url, startTime, endTime);
-
-    if (windowVisitCount === undefined) {
-      return item;
-    }
-
-    return {
-      ...item,
-      visitCount: windowVisitCount
-    };
-  });
-}
-
-function getVisitCountForWindow(url, startTime, endTime) {
-  if (!url) {
-    return Promise.resolve(undefined);
-  }
-
-  return new Promise((resolve) => {
-    chrome.history.getVisits({ url }, (visits) => {
-      const lastError = chrome.runtime?.lastError;
-
-      if (lastError) {
-        resolve(undefined);
-        return;
-      }
-
-      resolve(
-        (visits ?? []).filter((visit) => {
-          const visitTime = Number(visit?.visitTime ?? 0);
-          return visitTime >= startTime && visitTime <= endTime;
-        }).length
-      );
-    });
-  });
-}
-
-async function mapWithConcurrency(items, concurrency, mapper) {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-
-  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
-    while (nextIndex < items.length) {
-      const index = nextIndex;
-      nextIndex += 1;
-      results[index] = await mapper(items[index], index);
-    }
-  });
-
-  await Promise.all(workers);
-  return results;
 }
 
 function renderSummary(rawCount, dedupedCount, groupCount) {
@@ -550,13 +576,20 @@ function createResultItem(item, groupKey) {
   title.textContent = item.title || item.url || '(无标题)';
 
   titleRow.append(title);
+  if (item.isTitleRenamed) {
+    titleRow.append(createRenamedTag());
+  }
   actions.append(createRenameButton(item), createPinButton(item));
 
   const meta = document.createElement('div');
   meta.className = 'result-meta';
+  const visitCount = item.totalVisitCount ?? item.visitCount ?? 0;
+  const visitCountLabel = item.totalVisitCountReliable === false
+    ? `至少 ${visitCount} 次访问`
+    : `${visitCount} 次访问`;
   meta.append(
     createTag(formatVisitTime(item.lastVisitTime)),
-    createTag(`${item.totalVisitCount || item.visitCount || 0} 次访问`)
+    createTag(visitCountLabel)
   );
 
   content.append(titleRow);
@@ -772,7 +805,8 @@ function createRenameMetric() {
   metric.append(metricLabel);
   metric.addEventListener('click', () => {
     showRenamedOnly = !showRenamedOnly;
-    runSearch();
+    rememberCurrentSearchState();
+    scheduleSnapshotRender();
   });
 
   return metric;
@@ -791,7 +825,8 @@ function createMinimalModeMetric() {
   metric.append(metricLabel);
   metric.addEventListener('click', () => {
     showMinimalMode = !showMinimalMode;
-    runSearch();
+    rememberCurrentSearchState();
+    scheduleSnapshotRender();
   });
 
   return metric;
@@ -825,6 +860,14 @@ function createTag(text) {
   const tag = document.createElement('span');
   tag.className = 'tag';
   tag.textContent = text;
+  return tag;
+}
+
+function createRenamedTag() {
+  const tag = document.createElement('span');
+  tag.className = 'renamed-tag';
+  tag.textContent = '已重命名';
+  tag.title = '当前显示的是自定义网页名';
   return tag;
 }
 
@@ -874,10 +917,12 @@ async function saveRenameDialogTitle() {
   }
 
   try {
-    await saveTitleOverride(getRenameDialogTitleOverrideKey(), normalizedTitle);
+    await saveTitleOverride(getRenameDialogTitleOverrideKey(), normalizedTitle, {
+      targetUrl: renameDialogItem.url
+    });
     titleOverrides = await loadTitleOverrides();
     closeRenameDialog();
-    await runSearch();
+    scheduleSnapshotRender();
   } catch (error) {
     renameDialog.status.textContent = error.message || '保存失败。';
   }
@@ -892,10 +937,10 @@ async function restoreRenameDialogOriginalTitle() {
   renameDialog.input.value = originalTitle;
 
   try {
-    await deleteTitleOverrides([getRenameDialogTitleOverrideKey()]);
+    await deleteTitleOverrides(getRenameDialogTitleOverrideKeys());
     titleOverrides = await loadTitleOverrides();
     closeRenameDialog();
-    await runSearch();
+    scheduleSnapshotRender();
   } catch (error) {
     renameDialog.status.textContent = error.message || '还原失败。';
   }
@@ -907,6 +952,17 @@ function getRenameDialogTitleOverrideKey() {
   }
 
   return renameDialogItem.titleOverrideKey || getHistoryItemTitleOverrideKey(renameDialogItem);
+}
+
+function getRenameDialogTitleOverrideKeys() {
+  if (!renameDialogItem) {
+    return [];
+  }
+
+  return [
+    ...(renameDialogItem.titleOverrideKeys ?? []),
+    getRenameDialogTitleOverrideKey()
+  ];
 }
 
 function renameGroup(group) {
@@ -936,7 +992,7 @@ async function saveGroupRenameDialogName() {
     await saveGroupNameOverride(groupRenameDialogGroup.key, normalizedName);
     groupNameOverrides = await loadGroupNameOverrides();
     closeGroupRenameDialog();
-    await runSearch();
+    scheduleSnapshotRender();
   } catch (error) {
     groupRenameDialog.status.textContent = error.message || '保存失败。';
   }
@@ -953,7 +1009,7 @@ async function restoreGroupOriginalName() {
     await deleteGroupNameOverride(groupRenameDialogGroup.key);
     groupNameOverrides = await loadGroupNameOverrides();
     closeGroupRenameDialog();
-    await runSearch();
+    scheduleSnapshotRender();
   } catch (error) {
     groupRenameDialog.status.textContent = error.message || '还原失败。';
   }
@@ -1031,15 +1087,14 @@ function getRenameDialogInputValue(dialog) {
 
 async function togglePinnedItem(item) {
   const pinKey = item.pinKey || getHistoryItemPinKey(item);
-
-  if (pinnedUrlKeys.has(pinKey)) {
-    pinnedUrlKeys.delete(pinKey);
-  } else {
-    pinnedUrlKeys.add(pinKey);
-  }
+  const shouldPin = !item.isPinned;
 
   try {
-    await savePinnedUrlKeys(pinnedUrlKeys);
+    pinnedUrlKeys = await togglePinnedUrlKey(
+      pinKey,
+      shouldPin,
+      item.activePinKeys ?? item.pinKeys ?? []
+    );
     if (showRenamedOnly) {
       renderFlatResults(applyPinnedStateToItems(currentFlatItems, pinnedUrlKeys));
       return;
@@ -1068,7 +1123,7 @@ function addStorageChangeListener() {
     }
 
     if (changes[PINNED_URLS_STORAGE_KEY]) {
-      pinnedUrlKeys = normalizeStringSet(changes[PINNED_URLS_STORAGE_KEY].newValue);
+      pinnedUrlKeys = normalizePinnedPageKeys(changes[PINNED_URLS_STORAGE_KEY].newValue);
       if (showRenamedOnly) {
         renderFlatResults(applyPinnedStateToItems(currentFlatItems, pinnedUrlKeys));
       } else {
@@ -1079,22 +1134,22 @@ function addStorageChangeListener() {
     }
 
     if (changes[TITLE_OVERRIDES_STORAGE_KEY]) {
-      titleOverrides = normalizeTitleOverrideMap(changes[TITLE_OVERRIDES_STORAGE_KEY].newValue);
-      runSearch();
+      titleOverrides = normalizePageTitleOverrideMap(changes[TITLE_OVERRIDES_STORAGE_KEY].newValue);
+      scheduleSnapshotRender();
     }
 
     if (changes[CAPTURED_PAGE_TITLES_STORAGE_KEY]) {
       capturedPageTitles = normalizeCapturedPageMap(
         changes[CAPTURED_PAGE_TITLES_STORAGE_KEY].newValue
       );
-      runSearch();
+      scheduleSnapshotRender();
     }
 
     if (changes[GROUP_NAME_OVERRIDES_STORAGE_KEY]) {
       groupNameOverrides = normalizeTitleOverrideMap(
         changes[GROUP_NAME_OVERRIDES_STORAGE_KEY].newValue
       );
-      runSearch();
+      scheduleSnapshotRender();
     }
   });
 }

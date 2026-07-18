@@ -137,7 +137,8 @@
       await sendRuntimeMessage({
         type: SAVE_MESSAGE,
         titleOverrideKey: draft.titleOverrideKey,
-        title
+        title,
+        url: draft.url
       });
       setStatus(status, '已保存');
       closeSoon(close);
