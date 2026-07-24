@@ -12,8 +12,10 @@
 ## 扩展浏览器验证
 
 - 修改扩展代码后，先运行 `npm run verify`；通过后必须使用 Chrome DevTools MCP 在用户当前 Chrome Profile 中完成真实浏览器 smoke test，不能只依赖 Node.js 测试。
+- 启动浏览器验证前，先检查 Chrome DevTools MCP 配置必须包含 `--ignoreDefaultChromeArg=--disable-extensions` 和 `--categoryExtensions=true`，再调用第一次 `list_pages`；禁止先按默认参数启动后才补救。随后检查 Agent Canary 主进程命令行，确认不含 `--disable-extensions`；若仍存在该参数，立即停止加载尝试，只终止智能体自己启动的 MCP/Agent Canary，并用 `--channel canary --userDataDir /Users/bytedance/.codex/chrome-profiles/agent-canary --ignoreDefaultChromeArg=--disable-extensions --categoryExtensions=true` 重启，不得改用 Stable、`--autoConnect` 或用户主 Profile。优先使用 MCP 的 `install_extension` / `reload_extension`；`chrome://extensions` 显示目录选择成功不代表扩展已加载，必须以扩展卡片出现及 `chrome://history` 进入 `chrome-extension:` 上下文为准。
 - 本项目无需构建，Chrome 直接把仓库根目录作为 unpacked extension 加载。不要为 MCP 添加无法从 npm 子进程调用的伪 `test:browser` 脚本，也不要硬编码扩展 ID。
 - 优先复用已有的空白页或扩展页并导航到 `chrome://history`。确认实际页面满足 `location.protocol === 'chrome-extension:'`，并读取 `chrome.runtime.getManifest().version` 与 `#app-version`，确保运行版本与 `manifest.json` 一致。
 - 在扩展页通过 Chrome DevTools MCP 执行 `setTimeout(() => chrome.runtime.reload(), 0)` 触发重载。旧扩展页目标随后关闭属于正常行为；重新导航到 `chrome://history`，再次校验 manifest 版本和页面版本角标，禁止把“已发送 reload”误判为验证完成。
 - 重载后按本次变更执行最小真实交互，至少覆盖相关主路径、检查页面 Console error，并确认主要控件仍可操作。除非测试目标本身需要，避免修改用户的重命名、置顶等持久数据。
+- 验证搜索缓存或启动性能时，不能只证明 `chrome.history.search` 未调用；必须确认缓存保存的是去重、过滤后的匹配结果而非原始历史快照，并用页面加载前注入的观察器记录重开状态序列，确保同关键词缓存命中不出现“搜索中”且不重复执行去重、过滤。主动点击搜索仍必须进入“搜索中”并刷新缓存。
 - 只有 MCP 无法进入扩展上下文或调用 `chrome.runtime.reload()` 时，才使用 Computer Use 在 `chrome://extensions` 操作重载，并在交付中说明降级原因。

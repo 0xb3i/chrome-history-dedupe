@@ -1,6 +1,6 @@
 {
   "name": "chrome-history-dedupe-extension",
-  "version": "0.3.2",
+  "version": "0.3.10",
   "private": true,
   "type": "module",
   "scripts": {

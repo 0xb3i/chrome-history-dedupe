@@ -12,7 +12,9 @@ import {
   groupHistoryItems
 } from './history-utils.js';
 import {
-  createHistorySnapshotLoader
+  appendTimeExemptRenamedItems,
+  createHistorySnapshotLoader,
+  getTimeExemptRenameLookupTexts
 } from './history-data.js';
 import {
   CAPTURED_PAGE_TITLES_STORAGE_KEY,
@@ -21,6 +23,7 @@ import {
   GROUP_NAME_OVERRIDES_STORAGE_KEY,
   loadCapturedPageTitles,
   loadGroupNameOverrides,
+  loadLastSearchSnapshot,
   loadLastSearchState,
   loadPinnedUrlKeys,
   loadTitleOverrides,
@@ -30,6 +33,7 @@ import {
   normalizeTitleOverrideMap,
   PINNED_URLS_STORAGE_KEY,
   saveGroupNameOverride,
+  saveLastSearchSnapshot,
   saveLastSearchState,
   saveTitleOverride,
   togglePinnedUrlKey,
@@ -38,7 +42,6 @@ import {
 
 const DEDUPE_MODE = 'page-family';
 const SNAPSHOT_RENDER_DEBOUNCE_MS = 50;
-const SNAPSHOT_REUSE_MS = 30 * 1000;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
 const historySnapshotLoader = createHistorySnapshotLoader();
 
@@ -67,8 +70,8 @@ let showRenamedOnly = false;
 let showMinimalMode = false;
 let latestSearchRequestId = 0;
 let historySnapshot = [];
+let searchSnapshot = null;
 let historySnapshotLoadedAt = 0;
-let historySnapshotRange = '';
 let snapshotRenderTimer = null;
 
 const currentYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
@@ -83,7 +86,7 @@ const otherYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
 });
 form.addEventListener('submit', (event) => {
   event.preventDefault();
-  searchOrRenderSnapshot();
+  runSearch({ forceRefresh: true });
 });
 setupRangeSelect();
 shortcutSettingsButton?.addEventListener('click', () => {
@@ -107,8 +110,6 @@ function renderRuntimeVersion() {
 }
 
 async function init() {
-  setLoading();
-
   try {
     const [loadedPinnedUrlKeys, loadedGroupNameOverrides, loadedTitleOverrides, loadedCapturedPageTitles, lastSearchState] =
       await Promise.all([
@@ -126,30 +127,46 @@ async function init() {
     selectQueryInputOnPopupOpen();
     isInitialized = true;
     addStorageChangeListener();
-    await runSearch();
+    addHistoryChangeListeners();
+    const cachedSnapshot = await loadCachedSearchSnapshot();
+
+    if (cachedSnapshot) {
+      searchSnapshot = cachedSnapshot;
+      historySnapshotLoadedAt = Date.now();
+      renderHistorySnapshot();
+    } else {
+      await runSearch();
+    }
   } catch (error) {
     renderError(error);
   }
 }
 
-async function runSearch() {
+async function runSearch(options = {}) {
   const searchRequestId = ++latestSearchRequestId;
+  const requestedQuery = queryInput.value;
   const requestedRange = rangeSelect.value;
 
   setLoading();
 
   try {
-    await rememberCurrentSearchState();
-    const itemsWithWindowVisitCounts = await loadHistorySnapshot(requestedRange);
+    void rememberCurrentSearchState();
+    if (options.forceRefresh) {
+      historySnapshotLoader.invalidate();
+    }
+    const loadedHistorySnapshot = await loadHistorySnapshot(requestedRange);
 
     if (!isLatestSearchRequest(searchRequestId)) {
       return;
     }
 
-    historySnapshot = itemsWithWindowVisitCounts;
+    historySnapshot = loadedHistorySnapshot;
+    searchSnapshot = createSearchSnapshot(loadedHistorySnapshot, requestedQuery);
     historySnapshotLoadedAt = Date.now();
-    historySnapshotRange = requestedRange;
     renderHistorySnapshot();
+    void saveLastSearchSnapshot(requestedQuery, requestedRange, searchSnapshot).catch(() => {
+      // A session cache speeds up reopening, but search results remain usable without it.
+    });
   } catch (error) {
     if (isLatestSearchRequest(searchRequestId)) {
       renderError(error);
@@ -157,22 +174,28 @@ async function runSearch() {
   }
 }
 
-function searchOrRenderSnapshot() {
-  const snapshotIsFresh = historySnapshotRange === rangeSelect.value &&
-    Date.now() - historySnapshotLoadedAt <= SNAPSHOT_REUSE_MS;
-
-  if (!snapshotIsFresh) {
-    runSearch();
-    return;
+async function loadCachedSearchSnapshot() {
+  try {
+    return await loadLastSearchSnapshot(queryInput.value, rangeSelect.value);
+  } catch {
+    return null;
   }
-
-  latestSearchRequestId += 1;
-  void rememberCurrentSearchState();
-  renderHistorySnapshot();
 }
 
-function loadHistorySnapshot(range) {
-  return historySnapshotLoader.load(range, getStartTime(range));
+async function loadHistorySnapshot(range) {
+  const startTime = getStartTime(range);
+  const windowItems = await historySnapshotLoader.load(range, startTime);
+  const lookupTexts = range === 'all'
+    ? []
+    : getTimeExemptRenameLookupTexts(windowItems, titleOverrides);
+  const allHistoryItems = range === 'all'
+    ? windowItems
+    : (await Promise.all(lookupTexts.map((text) => (
+        historySnapshotLoader.load(`renamed:${text}`, 0, text)
+      )))).flat();
+  return appendTimeExemptRenamedItems(windowItems, titleOverrides, {
+    allHistoryItems
+  });
 }
 
 function renderHistorySnapshot() {
@@ -182,11 +205,8 @@ function renderHistorySnapshot() {
   }
 
   const query = queryInput.value.trim();
-  const capturedTitleItems = applyCapturedTitlesToItems(historySnapshot, capturedPageTitles);
-  const renamedItems = applyTitleOverridesToItems(capturedTitleItems, titleOverrides);
-  const urlItems = dedupeHistoryItems(renamedItems, 'normalized-url');
-  const pageItems = dedupeHistoryItems(urlItems, DEDUPE_MODE);
-  const matchedItems = filterHistoryItemsByQuery(pageItems, query);
+  const snapshot = searchSnapshot ?? createSearchSnapshot(historySnapshot, query);
+  const matchedItems = snapshot.matchedItems;
   const visibleItems = showRenamedOnly
     ? matchedItems.filter((item) => item.isTitleRenamed)
     : matchedItems;
@@ -194,7 +214,7 @@ function renderHistorySnapshot() {
 
   currentGroups = showRenamedOnly ? [] : groupedItems;
   currentFlatItems = showRenamedOnly ? sortItemsByDisplayName(visibleItems) : [];
-  renderSummary(pageItems.length, visibleItems.length, groupedItems.length);
+  renderSummary(snapshot.pageItemCount, visibleItems.length, groupedItems.length);
 
   if (showRenamedOnly) {
     renderFlatResults(applyPinnedStateToItems(currentFlatItems, pinnedUrlKeys));
@@ -205,6 +225,21 @@ function renderHistorySnapshot() {
   }
 
   setStatus(showRenamedOnly ? `${visibleItems.length} 条已重命名` : `${visibleItems.length} 条`);
+}
+
+function createSearchSnapshot(items, query) {
+  const pageItems = createPageItems(items);
+  return {
+    pageItemCount: pageItems.length,
+    matchedItems: filterHistoryItemsByQuery(pageItems, String(query ?? '').trim())
+  };
+}
+
+function createPageItems(items) {
+  const capturedTitleItems = applyCapturedTitlesToItems(items, capturedPageTitles);
+  const renamedItems = applyTitleOverridesToItems(capturedTitleItems, titleOverrides);
+  const urlItems = dedupeHistoryItems(renamedItems, 'normalized-url');
+  return dedupeHistoryItems(urlItems, DEDUPE_MODE);
 }
 
 function scheduleSnapshotRender() {
@@ -239,6 +274,7 @@ function applyLastSearchState(state) {
   setRangeSelectValue(state.range);
   showRenamedOnly = Boolean(state.showRenamedOnly);
   showMinimalMode = Boolean(state.showMinimalMode);
+  syncMinimalModePresentation();
 }
 
 function selectQueryInputOnPopupOpen() {
@@ -584,22 +620,17 @@ function createResultItem(item, groupKey) {
   const meta = document.createElement('div');
   meta.className = 'result-meta';
   const visitCount = item.totalVisitCount ?? item.visitCount ?? 0;
-  const visitCountLabel = item.totalVisitCountReliable === false
-    ? `至少 ${visitCount} 次访问`
-    : `${visitCount} 次访问`;
   meta.append(
     createTag(formatVisitTime(item.lastVisitTime)),
-    createTag(visitCountLabel)
+    createTag(`${visitCount} 次访问`)
   );
 
   content.append(titleRow);
-  if (!showMinimalMode) {
-    const url = document.createElement('div');
-    url.className = 'result-url';
-    url.title = item.url || '';
-    url.textContent = formatHistoryUrlForGroup(item, groupKey);
-    content.append(url);
-  }
+  const url = document.createElement('div');
+  url.className = 'result-url';
+  url.title = item.url || '';
+  url.textContent = formatHistoryUrlForGroup(item, groupKey);
+  content.append(url);
   content.append(meta);
   row.append(content, actions);
   return row;
@@ -814,7 +845,7 @@ function createRenameMetric() {
 
 function createMinimalModeMetric() {
   const metric = document.createElement('button');
-  metric.className = 'metric metric-button';
+  metric.className = 'metric metric-button minimal-mode-metric';
   metric.type = 'button';
   metric.setAttribute('aria-pressed', String(showMinimalMode));
   metric.title = showMinimalMode ? '关闭极简模式' : '开启极简模式';
@@ -825,11 +856,22 @@ function createMinimalModeMetric() {
   metric.append(metricLabel);
   metric.addEventListener('click', () => {
     showMinimalMode = !showMinimalMode;
-    rememberCurrentSearchState();
-    scheduleSnapshotRender();
+    syncMinimalModePresentation(metric);
+    void rememberCurrentSearchState();
   });
 
   return metric;
+}
+
+function syncMinimalModePresentation(metric = null) {
+  document.body.classList.toggle('minimal-mode', showMinimalMode);
+
+  if (!metric) {
+    return;
+  }
+
+  metric.setAttribute('aria-pressed', String(showMinimalMode));
+  metric.title = showMinimalMode ? '关闭极简模式' : '开启极简模式';
 }
 
 function createCollapseMetric() {
@@ -1135,13 +1177,16 @@ function addStorageChangeListener() {
 
     if (changes[TITLE_OVERRIDES_STORAGE_KEY]) {
       titleOverrides = normalizePageTitleOverrideMap(changes[TITLE_OVERRIDES_STORAGE_KEY].newValue);
-      scheduleSnapshotRender();
+      void runSearch({ forceRefresh: true });
     }
 
     if (changes[CAPTURED_PAGE_TITLES_STORAGE_KEY]) {
       capturedPageTitles = normalizeCapturedPageMap(
         changes[CAPTURED_PAGE_TITLES_STORAGE_KEY].newValue
       );
+      if (historySnapshot.length > 0) {
+        searchSnapshot = createSearchSnapshot(historySnapshot, queryInput.value);
+      }
       scheduleSnapshotRender();
     }
 
@@ -1152,6 +1197,16 @@ function addStorageChangeListener() {
       scheduleSnapshotRender();
     }
   });
+}
+
+function addHistoryChangeListeners() {
+  const invalidateSnapshots = () => {
+    historySnapshotLoader.invalidate();
+    historySnapshotLoadedAt = 0;
+  };
+
+  globalThis.chrome?.history?.onVisited?.addListener(invalidateSnapshots);
+  globalThis.chrome?.history?.onVisitRemoved?.addListener(invalidateSnapshots);
 }
 
 function formatGroupMeta(group) {

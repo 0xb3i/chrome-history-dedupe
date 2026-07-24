@@ -13,6 +13,7 @@ const cancelButton = document.querySelector('#cancel-button');
 const restoreButton = document.querySelector('#restore-button');
 
 let currentDraft = null;
+let canRestoreOriginalTitle = false;
 
 form.addEventListener('submit', (event) => {
   event.preventDefault();
@@ -46,7 +47,8 @@ async function init() {
     }
 
     titleInput.value = currentDraft.currentTitle;
-    restoreButton.disabled = !(await hasTitleOverride(currentDraft.titleOverrideKey));
+    canRestoreOriginalTitle = await hasTitleOverride(currentDraft.titleOverrideKey);
+    restoreButton.disabled = !canRestoreOriginalTitle;
     titleInput.select();
   } catch (error) {
     renderError(error.message || '读取网页信息失败。');
@@ -61,20 +63,22 @@ async function saveRename() {
   const title = titleInput.value.trim().replace(/\s+/g, ' ');
 
   if (!title) {
-    setStatus('标题不能为空。');
+    setError('标题不能为空。');
     titleInput.focus();
     return;
   }
 
+  setPending(true);
   try {
     await saveTitleOverride(currentDraft.titleOverrideKey, title, {
       targetUrl: currentDraft.url
     });
     await deleteRenameDraft(currentDraft.id);
-    setStatus('已保存');
+    showSuccessMessage('保存成功');
     closeSoon();
   } catch (error) {
-    setStatus(error.message || '保存失败。');
+    setPending(false);
+    setError(error.message || '保存失败。');
   }
 }
 
@@ -85,13 +89,15 @@ async function restoreOriginalTitle() {
 
   titleInput.value = currentDraft.originalTitle || currentDraft.url || '';
 
+  setPending(true);
   try {
     await deleteTitleOverrides([currentDraft.titleOverrideKey]);
     await deleteRenameDraft(currentDraft.id);
-    setStatus('已还原');
+    showSuccessMessage('已还原原名');
     closeSoon();
   } catch (error) {
-    setStatus(error.message || '还原失败。');
+    setPending(false);
+    setError(error.message || '还原失败。');
   }
 }
 
@@ -103,11 +109,41 @@ async function hasTitleOverride(titleOverrideKey) {
 function renderError(message) {
   titleInput.disabled = true;
   restoreButton.disabled = true;
-  setStatus(message);
+  setError(message);
 }
 
-function setStatus(message) {
+function setError(message) {
   statusLabel.textContent = message;
+}
+
+function setPending(isPending) {
+  titleInput.disabled = isPending;
+  restoreButton.disabled = isPending || !canRestoreOriginalTitle;
+  cancelButton.disabled = isPending;
+  form.querySelector('button[type="submit"]').disabled = isPending;
+
+  if (isPending) {
+    setError('');
+  }
+}
+
+function showSuccessMessage(message) {
+  document.querySelector('.rename-message')?.remove();
+
+  const element = document.createElement('div');
+  element.className = 'rename-message';
+  element.setAttribute('role', 'status');
+  element.setAttribute('aria-live', 'polite');
+
+  const icon = document.createElement('span');
+  icon.className = 'rename-message-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = '✓';
+
+  const text = document.createElement('span');
+  text.textContent = message;
+  element.append(icon, text);
+  document.body.append(element);
 }
 
 function closeWindow() {
@@ -115,5 +151,5 @@ function closeWindow() {
 }
 
 function closeSoon() {
-  globalThis.setTimeout(closeWindow, 250);
+  globalThis.setTimeout(closeWindow, 1200);
 }

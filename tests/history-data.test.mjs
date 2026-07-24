@@ -2,27 +2,112 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  applyVisitCountsForWindow,
+  appendTimeExemptRenamedItems,
   createHistorySnapshotLoader,
   DEFAULT_HISTORY_PAGE_SIZE,
-  DEFAULT_VISIT_COUNT_CONCURRENCY,
+  DEFAULT_HISTORY_SNAPSHOT_CACHE_MS,
+  getTimeExemptRenameLookupTexts,
   searchChromeHistory
 } from '../src/history-data.js';
 
-test('snapshot loader shares one in-flight history request per range and retries after completion', async () => {
+test('renamed-page lookups group missing pages by hostname and skip pages in the window', () => {
+  const result = getTimeExemptRenameLookupTexts(
+    [historyItem('https://present.example.com/docs/abc12345', 900)],
+    new Map([
+      ['https://present.example.com/docs/abc12345', {
+        targetUrl: 'https://present.example.com/docs/abc12345?tab=details',
+        title: '已存在'
+      }],
+      ['https://missing.example.com/docs/first123', {
+        targetUrl: 'https://missing.example.com/docs/first123?tab=details',
+        title: '缺失一'
+      }],
+      ['https://missing.example.com/docs/second456', {
+        targetUrl: 'https://missing.example.com/docs/second456?tab=details',
+        title: '缺失二'
+      }]
+    ])
+  );
+
+  assert.deepEqual(result, ['missing.example.com']);
+});
+
+test('renamed pages outside the selected time window are restored from real visits', async () => {
+  const oldUrl = 'https://example.com/docs/old';
+  const oldItem = historyItem(oldUrl, 300, 3);
+  const result = await appendTimeExemptRenamedItems(
+    [historyItem('https://example.com/recent', 900, 2)],
+    new Map([[
+      oldUrl,
+      { title: '长期文档', targetUrl: oldUrl, updatedAt: 500 }
+    ]]),
+    { allHistoryItems: [oldItem] }
+  );
+
+  assert.equal(result.length, 2);
+  assert.equal(result[1], oldItem);
+});
+
+test('renamed pages already represented in the window are not loaded or duplicated', async () => {
+  const windowItem = historyItem(
+    'https://example.com/report?activeTab=summary&timestamp=100',
+    900,
+    2
+  );
+  const windowItems = [windowItem];
+  const result = await appendTimeExemptRenamedItems(
+    windowItems,
+    new Map([[
+      'https://example.com/report',
+      {
+        title: '报告',
+        targetUrl: 'https://example.com/report?activeTab=details&timestamp=200',
+        updatedAt: 500
+      }
+    ]]),
+    { allHistoryItems: [windowItem] }
+  );
+
+  assert.equal(result, windowItems);
+});
+
+test('renamed pages are restored through another URL alias with the same page identity', async () => {
+  const storedTarget = 'https://example.com/report/abc12345/overview';
+  const existingAlias = 'https://example.com/report/abc12345/settings?tab=members';
+  const aliasItem = historyItem(existingAlias, 300, 4);
+  const result = await appendTimeExemptRenamedItems(
+    [],
+    new Map([[
+      'https://example.com/report/abc12345',
+      { title: '长期报告', targetUrl: storedTarget, updatedAt: 500 }
+    ]]),
+    { allHistoryItems: [aliasItem] }
+  );
+
+  assert.deepEqual(result.map((item) => item.url), [existingAlias]);
+  assert.equal(result[0], aliasItem);
+});
+
+test('renamed pages deleted from all-time history are not restored', async () => {
+  const deletedUrl = 'https://example.com/deleted';
+  const result = await appendTimeExemptRenamedItems(
+    [],
+    new Map([[deletedUrl, { title: '已删除', targetUrl: deletedUrl, updatedAt: 100 }]]),
+    { allHistoryItems: [] }
+  );
+
+  assert.deepEqual(result, []);
+});
+
+test('snapshot loader shares in-flight work, caches ranges, and supports invalidation', async () => {
   const resolvers = [];
   let searchCalls = 0;
-  let countCalls = 0;
   const loader = createHistorySnapshotLoader({
     now: () => 500,
     searchHistory(query) {
       searchCalls += 1;
       assert.deepEqual(query, { text: '', startTime: 100, endTime: 500 });
       return new Promise((resolve) => resolvers.push(resolve));
-    },
-    applyVisitCounts(items) {
-      countCalls += 1;
-      return items;
     }
   });
 
@@ -34,13 +119,18 @@ test('snapshot loader shares one in-flight history request per range and retries
 
   resolvers.shift()([historyItem('https://example.com/a', 300)]);
   await Promise.all([first, second]);
-  assert.equal(countCalls, 1);
 
   const third = loader.load('week', 100);
+  assert.equal(DEFAULT_HISTORY_SNAPSHOT_CACHE_MS, 5 * 60 * 1000);
+  assert.equal(searchCalls, 1);
+  assert.equal((await third)[0].url, 'https://example.com/a');
+
+  loader.invalidate('week');
+  const fourth = loader.load('week', 100);
   await Promise.resolve();
   assert.equal(searchCalls, 2);
   resolvers.shift()([]);
-  await third;
+  await fourth;
 });
 
 test('history search paginates with an endTime cursor and deduplicates URLs', async () => {
@@ -247,127 +337,6 @@ test('history search surfaces chrome.runtime.lastError', async () => {
     searchChromeHistory({ text: '' }, { historyApi, runtimeApi }),
     /History database unavailable/
   );
-});
-
-test('all-time visit counts are retained without calling getVisits', async () => {
-  const items = [historyItem('https://example.com/a', 100, 17)];
-  let getVisitsCalls = 0;
-  const result = await applyVisitCountsForWindow(items, 0, 1000, {
-    historyApi: {
-      getVisits() {
-        getVisitsCalls += 1;
-      }
-    }
-  });
-
-  assert.equal(result, items);
-  assert.equal(result[0].visitCount, 17);
-  assert.equal(getVisitsCalls, 0);
-});
-
-test('visit counts use inclusive window boundaries and preserve result order', async () => {
-  const items = [
-    historyItem('https://example.com/a', 500, 10),
-    historyItem('https://example.com/b', 400, 20),
-    historyItem('https://example.com/c', 300, 30)
-  ];
-  const visitsByUrl = new Map([
-    [items[0].url, [{ visitTime: 99 }, { visitTime: 100 }, { visitTime: 200 }, { visitTime: 201 }]],
-    [items[1].url, [{ visitTime: 150 }]],
-    [items[2].url, []]
-  ]);
-  let activeRequests = 0;
-  let peakRequests = 0;
-  const historyApi = {
-    getVisits({ url }, callback) {
-      activeRequests += 1;
-      peakRequests = Math.max(peakRequests, activeRequests);
-      setTimeout(() => {
-        activeRequests -= 1;
-        callback(visitsByUrl.get(url));
-      }, url.endsWith('/a') ? 10 : 1);
-    }
-  };
-
-  const result = await applyVisitCountsForWindow(items, 100, 200, {
-    historyApi,
-    runtimeApi: {},
-    concurrency: 2
-  });
-
-  assert.equal(DEFAULT_VISIT_COUNT_CONCURRENCY, 32);
-  assert.equal(peakRequests, 2);
-  assert.deepEqual(result.map((item) => item.url), items.map((item) => item.url));
-  assert.deepEqual(result.map((item) => item.visitCount), [2, 1, 0]);
-});
-
-test('a getVisits failure marks only the affected count unreliable without mixing all-time totals', async () => {
-  const runtimeApi = {};
-  const goodItem = historyItem('https://example.com/good', 500, 10);
-  const failedItem = historyItem('https://example.com/failed', 400, 20);
-  const missingUrlItem = { title: 'Missing URL', visitCount: 30 };
-  const historyApi = {
-    getVisits({ url }, callback) {
-      if (url === failedItem.url) {
-        runtimeApi.lastError = { message: 'Could not read this URL' };
-        callback([]);
-        delete runtimeApi.lastError;
-        return;
-      }
-
-      callback([{ visitTime: 150 }]);
-    }
-  };
-
-  const result = await applyVisitCountsForWindow(
-    [goodItem, failedItem, missingUrlItem],
-    100,
-    200,
-    { historyApi, runtimeApi }
-  );
-
-  assert.notEqual(result[0], goodItem);
-  assert.equal(result[0].visitCount, 1);
-  assert.notEqual(result[1], failedItem);
-  assert.equal(result[1].visitCount, 0);
-  assert.equal(result[1].allTimeVisitCount, 20);
-  assert.equal(result[1].visitCountReliable, false);
-  assert.equal(result[2], missingUrlItem);
-});
-
-test('duplicate URLs share one getVisits request', async () => {
-  const items = [
-    historyItem('https://example.com/shared', 500, 10),
-    historyItem('https://example.com/shared', 400, 20)
-  ];
-  let getVisitsCalls = 0;
-  const result = await applyVisitCountsForWindow(items, 100, 200, {
-    runtimeApi: {},
-    historyApi: {
-      getVisits(_details, callback) {
-        getVisitsCalls += 1;
-        setTimeout(() => callback([{ visitTime: 150 }]), 1);
-      }
-    }
-  });
-
-  assert.equal(getVisitsCalls, 1);
-  assert.deepEqual(result.map((item) => item.visitCount), [1, 1]);
-});
-
-test('a synchronous getVisits error marks the count unreliable', async () => {
-  const item = historyItem('https://example.com/a', 500, 10);
-  const result = await applyVisitCountsForWindow([item], 100, 200, {
-    historyApi: {
-      getVisits() {
-        throw new Error('Unexpected API failure');
-      }
-    }
-  });
-
-  assert.equal(result[0].visitCount, 0);
-  assert.equal(result[0].allTimeVisitCount, 10);
-  assert.equal(result[0].visitCountReliable, false);
 });
 
 function historyItem(url, lastVisitTime, visitCount = 1) {

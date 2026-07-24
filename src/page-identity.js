@@ -28,21 +28,6 @@ const HASH_ROUTE_PATTERN = /^#!?\//;
 const STATEFUL_ROUTE_SEGMENTS = new Set([
   'keyword_search'
 ]);
-const RESOURCE_VIEW_PATH_SEGMENTS = new Set([
-  'activity',
-  'audit',
-  'config',
-  'configuration',
-  'inspector',
-  'logs',
-  'metrics',
-  'monitoring',
-  'overview',
-  'settings',
-  'summary',
-  'tools'
-]);
-
 export function normalizeUrlKey(rawUrl) {
   const rawValue = String(rawUrl ?? '');
 
@@ -81,11 +66,11 @@ export function getPageIdentityKey(rawUrl) {
 }
 
 export function getStableResourceIdentityKey(rawUrl) {
-  return getResourceIdentityKey(rawUrl, 'last');
+  return getResourceIdentityKey(rawUrl, 'first');
 }
 
 export function getLegacyResourceIdentityKey(rawUrl) {
-  return getResourceIdentityKey(rawUrl, 'first');
+  return getResourceIdentityKey(rawUrl, 'last');
 }
 
 function getUrlPageIdentityKey(inputUrl) {
@@ -98,8 +83,8 @@ function getUrlPageIdentityKey(inputUrl) {
     return url.href;
   }
 
-  const resourcePath = getResourcePath(url, 'last');
-  const resourceQuery = getResourceQuery(url);
+  const resourcePath = getResourcePath(url, 'first');
+  const resourceQuery = resourcePath.hasResourceId ? '' : getResourceQuery(url);
   const port = url.port ? `:${url.port}` : '';
   const origin = `${url.protocol}//${url.hostname.toLowerCase()}${port}`;
   const path = resourcePath.hasResourceId ? resourcePath.value : (url.pathname || '/');
@@ -162,7 +147,9 @@ function getResourceIdentityFromUrl(inputUrl, position) {
   const url = new URL(inputUrl.href);
   normalizeUrlSurface(url);
   const resourcePath = getResourcePath(url, position);
-  const resourceQuery = getResourceQuery(url);
+  const resourceQuery = resourcePath.hasResourceId && position === 'first'
+    ? ''
+    : getResourceQuery(url);
 
   if (!resourcePath.hasResourceId && !resourceQuery) {
     return '';
@@ -197,9 +184,7 @@ function getResourcePath(url, position) {
   const resourceIdIndex = position === 'first'
     ? resourceIdIndexes[0]
     : resourceIdIndexes.at(-1);
-  const suffix = segments.slice(resourceIdIndex + 1);
-  const identitySegments = suffix.length === 0 ||
-    RESOURCE_VIEW_PATH_SEGMENTS.has(suffix[0].toLowerCase())
+  const identitySegments = position === 'first'
     ? segments.slice(0, resourceIdIndex + 1)
     : segments;
 

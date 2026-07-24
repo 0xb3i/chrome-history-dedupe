@@ -1,24 +1,40 @@
+import { getPageIdentityKey } from './page-identity.js';
+
 export const DEFAULT_HISTORY_PAGE_SIZE = 10000;
-export const DEFAULT_VISIT_COUNT_CONCURRENCY = 32;
+export const DEFAULT_HISTORY_SNAPSHOT_CACHE_MS = 5 * 60 * 1000;
 
 export function createHistorySnapshotLoader(options = {}) {
   const searchHistory = options.searchHistory ?? searchChromeHistory;
-  const applyVisitCounts = options.applyVisitCounts ?? applyVisitCountsForWindow;
   const now = options.now ?? Date.now;
   const apiOptions = options.apiOptions ?? options;
+  const cacheTtlMs = normalizeNonNegativeNumber(
+    options.cacheTtlMs,
+    DEFAULT_HISTORY_SNAPSHOT_CACHE_MS
+  );
   const tasks = new Map();
+  const snapshots = new Map();
 
   return {
-    load(rangeKey, startTime) {
+    load(rangeKey, startTime, text = '') {
+      const cachedSnapshot = snapshots.get(rangeKey);
+      const currentTime = now();
+
+      if (cachedSnapshot && currentTime - cachedSnapshot.loadedAt <= cacheTtlMs) {
+        return Promise.resolve(cachedSnapshot.items);
+      }
+
       const currentTask = tasks.get(rangeKey);
       if (currentTask) {
         return currentTask;
       }
 
-      const endTime = now();
+      const endTime = currentTime;
       const task = Promise.resolve()
-        .then(() => searchHistory({ text: '', startTime, endTime }, apiOptions))
-        .then((items) => applyVisitCounts(items, startTime, endTime, apiOptions));
+        .then(() => searchHistory({ text, startTime, endTime }, apiOptions))
+        .then((items) => {
+          snapshots.set(rangeKey, { items, loadedAt: now() });
+          return items;
+        });
       tasks.set(rangeKey, task);
 
       const clearTask = () => {
@@ -28,8 +44,40 @@ export function createHistorySnapshotLoader(options = {}) {
       };
       void task.then(clearTask, clearTask);
       return task;
+    },
+    invalidate(rangeKey) {
+      if (rangeKey === undefined) {
+        snapshots.clear();
+        return;
+      }
+
+      snapshots.delete(rangeKey);
     }
   };
+}
+
+export function getTimeExemptRenameLookupTexts(items, titleOverrides) {
+  const windowItems = Array.isArray(items) ? items : [];
+  const overrides = titleOverrides instanceof Map
+    ? titleOverrides
+    : new Map(Object.entries(titleOverrides ?? {}));
+  const existingPageKeys = new Set(
+    windowItems.map((item) => getPageIdentityKey(item?.url)).filter(Boolean)
+  );
+  const lookupTexts = new Set();
+
+  for (const [storedKey, record] of overrides) {
+    const targetUrl = String(record?.targetUrl ?? '').trim();
+    const pageKey = getPageIdentityKey(targetUrl) || String(storedKey ?? '').trim();
+
+    if (!targetUrl || !pageKey || existingPageKeys.has(pageKey)) {
+      continue;
+    }
+
+    lookupTexts.add(getHistoryLookupText(targetUrl));
+  }
+
+  return [...lookupTexts].filter(Boolean).sort();
 }
 
 /**
@@ -116,69 +164,44 @@ export async function searchChromeHistory(query = {}, options = {}) {
 }
 
 /**
- * Replace each item's all-time visit count with the count inside a time window.
- * Individual getVisits failures leave the corresponding item untouched.
+ * Add renamed pages that are absent from the selected time window.
+ * Renames are not bookmarks: a page is restored only while at least one URL
+ * with the same page identity still exists in Chrome's all-time history.
  */
-export async function applyVisitCountsForWindow(items, startTime, endTime, options = {}) {
-  if (!Array.isArray(items) || items.length === 0) {
-    return Array.isArray(items) ? items : [];
-  }
-
-  const windowStartTime = toFiniteNumber(startTime);
-
-  if (windowStartTime === undefined || windowStartTime <= 0) {
-    return items;
-  }
-
-  const { historyApi, runtimeApi } = resolveChromeApis(options);
-
-  if (typeof historyApi?.getVisits !== 'function') {
-    return items;
-  }
-
-  const windowEndTime = toFiniteNumber(endTime) ?? Number.POSITIVE_INFINITY;
-  const concurrency = normalizePositiveInteger(
-    options.concurrency,
-    DEFAULT_VISIT_COUNT_CONCURRENCY
+export function appendTimeExemptRenamedItems(items, titleOverrides, options = {}) {
+  const windowItems = Array.isArray(items) ? items : [];
+  const allHistoryItems = Array.isArray(options.allHistoryItems)
+    ? options.allHistoryItems
+    : windowItems;
+  const overrides = titleOverrides instanceof Map
+    ? titleOverrides
+    : new Map(Object.entries(titleOverrides ?? {}));
+  const existingPageKeys = new Set(
+    windowItems.map((item) => getPageIdentityKey(item?.url)).filter(Boolean)
   );
-  const countRequests = new Map();
+  const renamedPageKeys = new Set();
 
-  return mapWithConcurrency(items, concurrency, async (item) => {
-    const url = typeof item?.url === 'string' ? item.url : '';
+  for (const [storedKey, record] of overrides) {
+    const targetUrl = String(record?.targetUrl ?? '').trim();
+    const pageKey = getPageIdentityKey(targetUrl) || String(storedKey ?? '').trim();
 
-    if (!url) {
-      return item;
+    if (!pageKey || existingPageKeys.has(pageKey)) {
+      continue;
     }
 
-    let countRequest = countRequests.get(url);
+    renamedPageKeys.add(pageKey);
+  }
 
-    if (!countRequest) {
-      countRequest = getVisitCountForWindow(
-        historyApi,
-        runtimeApi,
-        url,
-        windowStartTime,
-        windowEndTime
-      );
-      countRequests.set(url, countRequest);
-    }
+  if (renamedPageKeys.size === 0) {
+    return windowItems;
+  }
 
-    try {
-      const visitCount = await countRequest;
-      return {
-        ...item,
-        visitCount,
-        visitCountReliable: true
-      };
-    } catch {
-      return {
-        ...item,
-        allTimeVisitCount: Number(item?.visitCount ?? 0),
-        visitCount: 0,
-        visitCountReliable: false
-      };
-    }
+  const restoredItems = allHistoryItems.filter((item) => {
+    const pageKey = getPageIdentityKey(item?.url);
+    return renamedPageKeys.has(pageKey) && !existingPageKeys.has(pageKey);
   });
+
+  return restoredItems.length > 0 ? [...windowItems, ...restoredItems] : windowItems;
 }
 
 function resolveChromeApis(options) {
@@ -205,49 +228,6 @@ function searchHistoryPage(historyApi, runtimeApi, query) {
   });
 }
 
-function getVisitCountForWindow(historyApi, runtimeApi, url, startTime, endTime) {
-  return new Promise((resolve, reject) => {
-    historyApi.getVisits({ url }, (visits) => {
-      const lastError = runtimeApi?.lastError;
-
-      if (lastError) {
-        reject(createChromeApiError(lastError, `Could not read visits for ${url}`));
-        return;
-      }
-
-      const visitCount = (Array.isArray(visits) ? visits : []).reduce((count, visit) => {
-        const visitTime = toFiniteNumber(visit?.visitTime);
-
-        if (visitTime !== undefined && visitTime >= startTime && visitTime <= endTime) {
-          return count + 1;
-        }
-
-        return count;
-      }, 0);
-      resolve(visitCount);
-    });
-  });
-}
-
-async function mapWithConcurrency(items, concurrency, mapper) {
-  const results = new Array(items.length);
-  let nextIndex = 0;
-
-  const workers = Array.from(
-    { length: Math.min(concurrency, items.length) },
-    async () => {
-      while (nextIndex < items.length) {
-        const index = nextIndex;
-        nextIndex += 1;
-        results[index] = await mapper(items[index], index);
-      }
-    }
-  );
-
-  await Promise.all(workers);
-  return results;
-}
-
 function getOldestVisitTime(items) {
   let oldestTime;
 
@@ -262,6 +242,15 @@ function getOldestVisitTime(items) {
   return oldestTime;
 }
 
+function getHistoryLookupText(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    return /^https?:$/.test(url.protocol) ? url.hostname : rawUrl;
+  } catch {
+    return rawUrl;
+  }
+}
+
 function normalizePositiveInteger(value, fallback) {
   const numericValue = Number(value);
 
@@ -270,6 +259,15 @@ function normalizePositiveInteger(value, fallback) {
   }
 
   return Math.max(1, Math.floor(numericValue));
+}
+
+function normalizeNonNegativeNumber(value, fallback) {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  const numericValue = Number(value);
+  return Number.isFinite(numericValue) && numericValue >= 0 ? numericValue : fallback;
 }
 
 function toFiniteNumber(value) {

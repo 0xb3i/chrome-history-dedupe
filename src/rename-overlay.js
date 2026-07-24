@@ -60,7 +60,7 @@
 
     const status = document.createElement('p');
     status.className = 'status';
-    status.setAttribute('role', 'status');
+    status.setAttribute('role', 'alert');
 
     const actions = document.createElement('div');
     actions.className = 'actions';
@@ -68,6 +68,7 @@
     const restoreButton = document.createElement('button');
     restoreButton.type = 'button';
     restoreButton.className = 'secondary';
+    restoreButton.dataset.restoreAvailable = String(draft.hasTitleOverride);
     restoreButton.textContent = '还原原名';
     restoreButton.disabled = !draft.hasTitleOverride;
 
@@ -114,25 +115,26 @@
     panel.addEventListener('click', (event) => event.stopPropagation());
     panel.addEventListener('submit', (event) => {
       event.preventDefault();
-      saveRename(draft, input, status, close);
+      saveRename(draft, input, status, panel, shadow, overlay, close);
     });
     restoreButton.addEventListener('click', () => {
       input.value = draft.originalTitle || draft.url || '';
-      restoreRename(draft, status, close);
+      restoreRename(draft, status, panel, shadow, overlay, close);
     });
     input.focus();
     input.select();
   }
 
-  async function saveRename(draft, input, status, close) {
+  async function saveRename(draft, input, status, panel, shadow, overlay, close) {
     const title = input.value.trim().replace(/\s+/g, ' ');
 
     if (!title) {
-      setStatus(status, '标题不能为空。');
+      setError(status, '标题不能为空。');
       input.focus();
       return;
     }
 
+    setPending(panel, true);
     try {
       await sendRuntimeMessage({
         type: SAVE_MESSAGE,
@@ -140,23 +142,26 @@
         title,
         url: draft.url
       });
-      setStatus(status, '已保存');
+      showSuccessMessage(shadow, overlay, '保存成功');
       closeSoon(close);
     } catch (error) {
-      setStatus(status, error.message || '保存失败。');
+      setPending(panel, false);
+      setError(status, error.message || '保存失败。');
     }
   }
 
-  async function restoreRename(draft, status, close) {
+  async function restoreRename(draft, status, panel, shadow, overlay, close) {
+    setPending(panel, true);
     try {
       await sendRuntimeMessage({
         type: RESTORE_MESSAGE,
         titleOverrideKey: draft.titleOverrideKey
       });
-      setStatus(status, '已还原');
+      showSuccessMessage(shadow, overlay, '已还原原名');
       closeSoon(close);
     } catch (error) {
-      setStatus(status, error.message || '还原失败。');
+      setPending(panel, false);
+      setError(status, error.message || '还原失败。');
     }
   }
 
@@ -180,12 +185,46 @@
     });
   }
 
-  function setStatus(status, message) {
+  function setError(status, message) {
     status.textContent = message;
   }
 
+  function setPending(panel, isPending) {
+    for (const control of panel.querySelectorAll('input, button')) {
+      control.disabled = isPending;
+    }
+
+    if (!isPending) {
+      const restoreButton = panel.querySelector('[data-restore-available]');
+      restoreButton.disabled = restoreButton.dataset.restoreAvailable !== 'true';
+    }
+
+    if (isPending) {
+      setError(panel.querySelector('.status'), '');
+    }
+  }
+
+  function showSuccessMessage(shadow, overlay, message) {
+    overlay.remove();
+
+    const element = document.createElement('div');
+    element.className = 'message';
+    element.setAttribute('role', 'status');
+    element.setAttribute('aria-live', 'polite');
+
+    const icon = document.createElement('span');
+    icon.className = 'message-icon';
+    icon.setAttribute('aria-hidden', 'true');
+    icon.textContent = '✓';
+
+    const text = document.createElement('span');
+    text.textContent = message;
+    element.append(icon, text);
+    shadow.append(element);
+  }
+
   function closeSoon(close) {
-    globalThis.setTimeout(close, 250);
+    globalThis.setTimeout(close, 1200);
   }
 
   function createStyle() {
@@ -271,8 +310,62 @@
       .status {
         color: #ff4d4f;
         font-size: 12px;
-        min-height: 16px;
         margin: -2px 0 0;
+      }
+
+      .status:empty {
+        display: none;
+      }
+
+      .message {
+        align-items: center;
+        animation: message-enter 160ms cubic-bezier(0.645, 0.045, 0.355, 1) both;
+        background: #ffffff;
+        border-radius: 8px;
+        box-shadow: 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05);
+        color: rgba(0, 0, 0, 0.88);
+        display: flex;
+        font-size: 14px;
+        gap: 8px;
+        left: 50%;
+        line-height: 1.5714;
+        padding: 9px 12px;
+        position: fixed;
+        top: 24px;
+        transform: translateX(-50%);
+        white-space: nowrap;
+        z-index: 2147483647;
+      }
+
+      .message-icon {
+        align-items: center;
+        border: 1.5px solid currentColor;
+        border-radius: 50%;
+        color: #389e0d;
+        display: inline-flex;
+        font-size: 10px;
+        font-weight: 700;
+        height: 16px;
+        justify-content: center;
+        line-height: 1;
+        width: 16px;
+      }
+
+      @keyframes message-enter {
+        from {
+          opacity: 0;
+          transform: translate(-50%, -8px);
+        }
+        to {
+          opacity: 1;
+          transform: translate(-50%, 0);
+        }
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        .message {
+          animation: none;
+        }
       }
 
       .actions {

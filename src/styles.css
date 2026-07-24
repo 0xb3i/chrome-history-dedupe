@@ -713,6 +713,10 @@ h1 {
   white-space: nowrap;
 }
 
+.minimal-mode .result-url {
+  display: none;
+}
+
 .result-meta {
   display: flex;
   flex-wrap: wrap;
@@ -1018,8 +1022,63 @@ h1 {
 }
 
 .rename-status {
-  color: var(--muted);
+  color: var(--danger);
   font-size: 12px;
-  min-height: 18px;
-  margin: 10px 0 0;
+  line-height: 1.5;
+  margin: -6px 0 0;
+}
+
+.rename-status:empty {
+  display: none;
+}
+
+.rename-message {
+  align-items: center;
+  animation: rename-message-enter 160ms var(--ease) both;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05);
+  color: var(--text);
+  display: flex;
+  font-size: 14px;
+  gap: 8px;
+  left: 50%;
+  line-height: 1.5714;
+  padding: 9px 12px;
+  position: fixed;
+  top: 16px;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  z-index: 1000;
+}
+
+.rename-message-icon {
+  align-items: center;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
+  color: var(--success);
+  display: inline-flex;
+  font-size: 10px;
+  font-weight: 700;
+  height: 16px;
+  justify-content: center;
+  line-height: 1;
+  width: 16px;
+}
+
+@keyframes rename-message-enter {
+  from {
+    opacity: 0;
+    transform: translate(-50%, -8px);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rename-message {
+    animation: none;
+  }
 }

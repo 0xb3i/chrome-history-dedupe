@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  loadLastSearchSnapshot,
   loadTitleOverrides,
   normalizeCapturedPageMap,
   normalizeCapturedTitleMap,
@@ -9,9 +10,27 @@ import {
   normalizePageTitleOverrideMap,
   normalizePinnedPageKeys,
   saveTitleOverride,
+  saveLastSearchSnapshot,
   togglePinnedUrlKey,
   updateCapturedTitleRecords
 } from '../src/storage.js';
+
+test('last search snapshot reuses only the same normalized query and range', async () => {
+  const sessionValues = {};
+  globalThis.chrome = createStorageChrome({}, sessionValues);
+
+  try {
+    const items = [{ title: 'Docs', url: 'https://example.com/docs' }];
+    const snapshot = { pageItemCount: 20, matchedItems: items };
+    await saveLastSearchSnapshot('  MEEGO   story  ', 'week', snapshot);
+
+    assert.deepEqual(await loadLastSearchSnapshot('MEEGO story', 'week'), snapshot);
+    assert.equal(await loadLastSearchSnapshot('another query', 'week'), null);
+    assert.equal(await loadLastSearchSnapshot('MEEGO story', 'month'), null);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
 
 test('last search state normalizes query, range, and renamed filter', () => {
   assert.deepEqual(
@@ -106,14 +125,14 @@ test('legacy query-level renames collapse by path and keep the latest record', (
   );
 });
 
-test('loading version 2 overrides persists the query-level rename migration', async () => {
+test('loading version 3 overrides persists the first-resource-id migration', async () => {
   const storageKey = 'deduped-history-title-overrides';
   const migrationKey = 'deduped-history-title-overrides-migration';
-  const baseUrl = 'https://dataleap-va.tiktok-row.net/dorado/instance';
-  const firstUrl = `${baseUrl}?_instanceD_=first`;
-  const latestUrl = `${baseUrl}?searchType=content&keyword=109477584`;
+  const baseUrl = 'https://example.com/projects/prj12345';
+  const firstUrl = `${baseUrl}/tasks/task0001/overview`;
+  const latestUrl = `${baseUrl}/tasks/task0002/settings`;
   const values = {
-    [migrationKey]: 2,
+    [migrationKey]: 3,
     [storageKey]: {
       [firstUrl]: {
         title: '旧实例名',
@@ -134,7 +153,7 @@ test('loading version 2 overrides persists the query-level rename migration', as
 
     assert.equal(overrides.size, 1);
     assert.equal(overrides.get(baseUrl).title, '最新实例名');
-    assert.equal(values[migrationKey], 3);
+    assert.equal(values[migrationKey], 4);
     assert.deepEqual(Object.keys(values[storageKey]), [baseUrl]);
   } finally {
     delete globalThis.chrome;
@@ -286,21 +305,24 @@ test('unpin removes active redirect aliases while pin writes only the canonical 
   }
 });
 
-function createStorageChrome(values) {
+function createStorageChrome(values, sessionValues = {}) {
+  const createArea = (areaValues) => ({
+    get(key, callback) {
+      setTimeout(() => callback({ [key]: areaValues[key] }), 0);
+    },
+    set(nextValues, callback) {
+      setTimeout(() => {
+        Object.assign(areaValues, structuredClone(nextValues));
+        callback();
+      }, 0);
+    }
+  });
+
   return {
     runtime: {},
     storage: {
-      local: {
-        get(key, callback) {
-          setTimeout(() => callback({ [key]: values[key] }), 0);
-        },
-        set(nextValues, callback) {
-          setTimeout(() => {
-            Object.assign(values, structuredClone(nextValues));
-            callback();
-          }, 0);
-        }
-      }
+      local: createArea(values),
+      session: createArea(sessionValues)
     }
   };
 }

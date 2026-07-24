@@ -49,12 +49,10 @@ export function dedupeHistoryItems(items, mode = DEFAULT_MODE) {
         pinKeys: getItemPinKeys(item),
         representativeLastVisitTime: getRepresentativeVisitTime(item),
         representativeVisitCount: getRepresentativeVisitCount(item),
-        representativeVisitCountReliable: isRepresentativeVisitCountReliable(item),
         searchableTitles: getItemSearchableTitles(item),
         searchableUrls: getItemSearchableUrls(item),
         titleOverrideKeys: getItemTitleOverrideKeys(item),
-        totalVisitCount: getTotalVisitCount(item),
-        totalVisitCountReliable: isTotalVisitCountReliable(item)
+        totalVisitCount: getTotalVisitCount(item)
       }));
       continue;
     }
@@ -72,18 +70,13 @@ export function dedupeHistoryItems(items, mode = DEFAULT_MODE) {
       representativeVisitCount: isNormalizedUrlBucket
         ? getRepresentativeVisitCount(current) + getRepresentativeVisitCount(item)
         : getRepresentativeVisitCount(preferred),
-      representativeVisitCountReliable: isNormalizedUrlBucket
-        ? isRepresentativeVisitCountReliable(current) && isRepresentativeVisitCountReliable(item)
-        : isRepresentativeVisitCountReliable(preferred),
       searchableTitles: mergeStringValues(
         getItemSearchableTitles(current),
         getItemSearchableTitles(item)
       ),
       searchableUrls: mergeStringValues(getItemSearchableUrls(current), getItemSearchableUrls(item)),
       titleOverrideKeys: mergeTitleOverrideKeys(current, item),
-      totalVisitCount,
-      totalVisitCountReliable: isTotalVisitCountReliable(current) &&
-        isTotalVisitCountReliable(item)
+      totalVisitCount
     }));
   }
 
@@ -418,12 +411,10 @@ function decorateItem(item, dedupeKey, metadata) {
     pinKeys: metadata.pinKeys,
     representativeLastVisitTime: metadata.representativeLastVisitTime,
     representativeVisitCount: metadata.representativeVisitCount,
-    representativeVisitCountReliable: metadata.representativeVisitCountReliable,
     searchableTitles: metadata.searchableTitles,
     searchableUrls: metadata.searchableUrls,
     titleOverrideKeys: metadata.titleOverrideKeys,
-    totalVisitCount: metadata.totalVisitCount,
-    totalVisitCountReliable: metadata.totalVisitCountReliable
+    totalVisitCount: metadata.totalVisitCount
   };
 }
 
@@ -576,23 +567,11 @@ function getRepresentativeVisitCount(item) {
     return Number(item.representativeVisitCount);
   }
 
-  if (item?.visitCountReliable === false) {
-    return Number(item?.allTimeVisitCount ?? item?.visitCount ?? 0);
-  }
-
   return Number(item?.totalVisitCount ?? item?.visitCount ?? 0);
 }
 
 function getRepresentativeVisitTime(item) {
   return Number(item?.representativeLastVisitTime ?? item?.lastVisitTime ?? 0);
-}
-
-function isRepresentativeVisitCountReliable(item) {
-  return item?.representativeVisitCountReliable ?? (item?.visitCountReliable !== false);
-}
-
-function isTotalVisitCountReliable(item) {
-  return item?.totalVisitCountReliable ?? (item?.visitCountReliable !== false);
 }
 
 function safeDecodeUrlPath(value) {
@@ -691,13 +670,6 @@ function pickPreferredItem(current, candidate) {
 
   if (current?.isTitleRenamed && candidateRenameTime !== currentRenameTime) {
     return candidateRenameTime > currentRenameTime ? candidate : current;
-  }
-
-  const currentCountIsReliable = isRepresentativeVisitCountReliable(current);
-  const candidateCountIsReliable = isRepresentativeVisitCountReliable(candidate);
-
-  if (candidateCountIsReliable !== currentCountIsReliable) {
-    return candidateCountIsReliable ? candidate : current;
   }
 
   const currentVisits = getRepresentativeVisitCount(current);

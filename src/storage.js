@@ -5,13 +5,14 @@ export const TITLE_OVERRIDES_STORAGE_KEY = 'deduped-history-title-overrides';
 export const GROUP_NAME_OVERRIDES_STORAGE_KEY = 'deduped-history-group-name-overrides';
 export const RENAME_DRAFTS_STORAGE_KEY = 'deduped-history-rename-drafts';
 export const LAST_SEARCH_STATE_STORAGE_KEY = 'deduped-history-last-search-state';
+export const LAST_SEARCH_SNAPSHOT_STORAGE_KEY = 'deduped-history-last-search-snapshot';
 export const TITLE_OVERRIDES_MIGRATION_STORAGE_KEY = 'deduped-history-title-overrides-migration';
 export const CAPTURED_PAGE_TITLES_STORAGE_KEY = 'deduped-history-captured-page-titles';
 
 const RENAME_DRAFT_TTL_MS = 15 * 60 * 1000;
 const MAX_CAPTURED_PAGE_TITLES = 5000;
 const SEARCH_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter', 'all']);
-const TITLE_OVERRIDES_MIGRATION_VERSION = 3;
+const TITLE_OVERRIDES_MIGRATION_VERSION = 4;
 const STORAGE_MUTATION_LOCK_NAME = 'deduped-history-storage-mutation';
 let storageMutationQueue = Promise.resolve();
 
@@ -160,6 +161,54 @@ export async function loadLastSearchState() {
 
 export async function saveLastSearchState(state) {
   await setStorageValue(LAST_SEARCH_STATE_STORAGE_KEY, normalizeLastSearchState(state));
+}
+
+export async function loadLastSearchSnapshot(query, range) {
+  const storageArea = getChromeSessionStorageArea();
+
+  if (!storageArea) {
+    return null;
+  }
+
+  const storedItems = await chromeStorageGet(storageArea, LAST_SEARCH_SNAPSHOT_STORAGE_KEY);
+  const snapshot = storedItems[LAST_SEARCH_SNAPSHOT_STORAGE_KEY];
+
+  if (
+    snapshot?.version !== 2 ||
+    snapshot.query !== normalizeTitle(query) ||
+    snapshot.range !== normalizeSearchRange(range) ||
+    !Number.isFinite(snapshot.pageItemCount) ||
+    !Array.isArray(snapshot.matchedItems)
+  ) {
+    return null;
+  }
+
+  return {
+    pageItemCount: snapshot.pageItemCount,
+    matchedItems: snapshot.matchedItems
+  };
+}
+
+export async function saveLastSearchSnapshot(query, range, snapshot) {
+  const storageArea = getChromeSessionStorageArea();
+
+  if (
+    !storageArea ||
+    !Number.isFinite(snapshot?.pageItemCount) ||
+    !Array.isArray(snapshot?.matchedItems)
+  ) {
+    return;
+  }
+
+  await chromeStorageSet(storageArea, {
+    [LAST_SEARCH_SNAPSHOT_STORAGE_KEY]: {
+      version: 2,
+      query: normalizeTitle(query),
+      range: normalizeSearchRange(range),
+      pageItemCount: snapshot.pageItemCount,
+      matchedItems: snapshot.matchedItems
+    }
+  });
 }
 
 export async function saveGroupNameOverride(key, name) {
@@ -568,6 +617,10 @@ function withStorageMutationLock(callback) {
 
 function getChromeStorageArea() {
   return globalThis.chrome?.storage?.local;
+}
+
+function getChromeSessionStorageArea() {
+  return globalThis.chrome?.storage?.session;
 }
 
 function chromeStorageGet(storageArea, key) {

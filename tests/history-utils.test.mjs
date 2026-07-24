@@ -483,7 +483,7 @@ test('page family identity ignores changing tab titles and keeps a manual rename
   assert.equal(result.lastVisitTime, 300);
 });
 
-test('page family identity uses the deepest resource id instead of merging child resources', () => {
+test('page family identity stops at the first resource id and merges later child resources', () => {
   const taskA = normalizeHistoryKey({
     url: 'https://example.com/projects/prj12345/tasks/task0001/overview'
   }, 'page-family');
@@ -491,12 +491,11 @@ test('page family identity uses the deepest resource id instead of merging child
     url: 'https://example.com/projects/prj12345/tasks/task0002/settings'
   }, 'page-family');
 
-  assert.equal(taskA, 'https://example.com/projects/prj12345/tasks/task0001');
-  assert.equal(taskB, 'https://example.com/projects/prj12345/tasks/task0002');
-  assert.notEqual(taskA, taskB);
+  assert.equal(taskA, 'https://example.com/projects/prj12345');
+  assert.equal(taskA, taskB);
 });
 
-test('resource identity preserves unknown non-tab suffixes', () => {
+test('resource identity ignores every path suffix after the first resource id', () => {
   const alice = normalizeHistoryKey({
     url: 'https://example.com/projects/prj12345/members/alice'
   }, 'page-family');
@@ -504,9 +503,20 @@ test('resource identity preserves unknown non-tab suffixes', () => {
     url: 'https://example.com/projects/prj12345/members/bob'
   }, 'page-family');
 
-  assert.equal(alice, 'https://example.com/projects/prj12345/members/alice');
-  assert.equal(bob, 'https://example.com/projects/prj12345/members/bob');
-  assert.notEqual(alice, bob);
+  assert.equal(alice, 'https://example.com/projects/prj12345');
+  assert.equal(alice, bob);
+});
+
+test('path resource identities ignore query resource ids after the first path id', () => {
+  const first = normalizeHistoryKey({
+    url: 'https://aeolus.example.com/aeolus/pages/queryEditor/files/6337616?appId=1000137&taskId=281475001639962'
+  }, 'page-family');
+  const second = normalizeHistoryKey({
+    url: 'https://aeolus.example.com/aeolus/pages/queryEditor/files/6337616?appId=1000137&folderId=882956&taskId=281475001533557'
+  }, 'page-family');
+
+  assert.equal(first, 'https://aeolus.example.com/aeolus/pages/queryEditor/files/6337616');
+  assert.equal(first, second);
 });
 
 test('page family identity ignores all non-resource query parameters', () => {
@@ -824,30 +834,6 @@ test('two-stage dedupe chooses the tab with the largest aggregated normalized-UR
   assert.equal(result.representativeVisitCount, 12);
   assert.equal(result.totalVisitCount, 22);
   assert.equal(result.dedupeCount, 3);
-});
-
-test('reliable window counts outrank failed all-time fallbacks and mark totals as lower bounds', () => {
-  const [result] = dedupeHistoryItems([
-    {
-      id: 'failed-popular',
-      url: 'https://example.com/projects/prj12345/settings',
-      lastVisitTime: 300,
-      visitCount: 0,
-      allTimeVisitCount: 100,
-      visitCountReliable: false
-    },
-    {
-      id: 'reliable',
-      url: 'https://example.com/projects/prj12345/overview',
-      lastVisitTime: 100,
-      visitCount: 2,
-      visitCountReliable: true
-    }
-  ], 'page-family');
-
-  assert.equal(result.id, 'reliable');
-  assert.equal(result.totalVisitCount, 2);
-  assert.equal(result.totalVisitCountReliable, false);
 });
 
 test('dedupe representative is deterministic when normalized URL scores tie', () => {
@@ -1199,7 +1185,7 @@ test('captured redirect targets dedupe different history aliases of one final pa
   assert.equal(results[0].dedupeCount, 2);
 });
 
-test('unsafe legacy first-id capture never redirects distinct nested resources together', () => {
+test('captured titles follow first-id page identity across nested resource URLs', () => {
   const legacyKey = 'https://example.com/projects/prj12345';
   const items = applyCapturedTitlesToItems(
     [
@@ -1218,9 +1204,9 @@ test('unsafe legacy first-id capture never redirects distinct nested resources t
     }]])
   );
 
-  assert.equal(items[0].dedupeUrl, undefined);
-  assert.equal(items[1].dedupeUrl, undefined);
-  assert.equal(dedupeHistoryItems(items, 'page-family').length, 2);
+  assert.equal(items[0].dedupeUrl, 'https://example.com/projects/prj12345/tasks/task0001/overview');
+  assert.equal(items[1].dedupeUrl, 'https://example.com/projects/prj12345/tasks/task0001/overview');
+  assert.equal(dedupeHistoryItems(items, 'page-family').length, 1);
 });
 
 test('display titles remove invisible Unicode format controls that shift text alignment', () => {

@@ -35,19 +35,19 @@ test('history page script dedupes by stable page family before filtering', () =>
   assert.equal(historyPageJs.includes("const DEDUPE_MODE = 'page-family';"), true);
   assert.equal(historyPageJs.includes("dedupeHistoryItems(renamedItems, 'normalized-url')"), true);
   assert.equal(historyPageJs.includes('dedupeHistoryItems(urlItems, DEDUPE_MODE)'), true);
-  assert.equal(historyPageJs.indexOf('dedupeHistoryItems(urlItems, DEDUPE_MODE)') <
-    historyPageJs.indexOf('filterHistoryItemsByQuery(pageItems, query)'), true);
+  assert.equal(historyPageJs.indexOf('const pageItems = createPageItems(items)') <
+    historyPageJs.indexOf('filterHistoryItemsByQuery(pageItems, String(query'), true);
 });
 
 test('history page filters queries locally after applying renamed titles', () => {
-  assert.equal(historyDataJs.includes("searchHistory({ text: '', startTime, endTime }, apiOptions)"), true);
+  assert.equal(historyDataJs.includes('searchHistory({ text, startTime, endTime }, apiOptions)'), true);
   assert.equal(historyPageJs.includes('loadCapturedPageTitles'), true);
   assert.equal(historyPageJs.includes('applyCapturedTitlesToItems'), true);
   assert.equal(
-    historyPageJs.includes('applyCapturedTitlesToItems(historySnapshot, capturedPageTitles)'),
+    historyPageJs.includes('applyCapturedTitlesToItems(items, capturedPageTitles)'),
     true
   );
-  assert.equal(historyPageJs.includes('filterHistoryItemsByQuery(pageItems, query)'), true);
+  assert.equal(historyPageJs.includes('filterHistoryItemsByQuery(pageItems, String(query'), true);
   assert.equal(historyPageJs.includes('scheduleSnapshotRender'), true);
 });
 
@@ -75,16 +75,33 @@ test('background captures final tab titles for current and future tabs', () => {
   assert.equal(backgroundJs.includes('navigationUrls'), true);
 });
 
-test('history page rewrites visit counts to the selected time window', () => {
-  assert.equal(historyDataJs.includes('DEFAULT_VISIT_COUNT_CONCURRENCY = 32'), true);
-  assert.equal(historyDataJs.includes('const endTime = now();'), true);
-  assert.equal(historyDataJs.includes("searchHistory({ text: '', startTime, endTime }, apiOptions)"), true);
+test('history page uses cached history search totals without per-URL visit requests', () => {
+  assert.equal(historyDataJs.includes('const endTime = currentTime;'), true);
+  assert.equal(historyDataJs.includes('searchHistory({ text, startTime, endTime }, apiOptions)'), true);
   assert.equal(historyPageJs.includes('createHistorySnapshotLoader'), true);
-  assert.equal(historyPageJs.includes('historySnapshotLoader.load(range, getStartTime(range))'), true);
-  assert.equal(historyDataJs.includes('historyApi.getVisits({ url }'), true);
-  assert.equal(historyDataJs.includes('visitTime >= startTime && visitTime <= endTime'), true);
-  assert.equal(historyDataJs.includes('visitCount'), true);
-  assert.equal(historyDataJs.includes('mapWithConcurrency(items, concurrency'), true);
+  assert.equal(historyPageJs.includes('historySnapshotLoader.load(range, startTime)'), true);
+  assert.equal(historyDataJs.includes('getVisits'), false);
+  assert.equal(historyPageJs.includes('applyVisitCountsForWindow'), false);
+  assert.equal(historyPageJs.includes('const visitCount = item.totalVisitCount ?? item.visitCount ?? 0;'), true);
+  assert.equal(historyDataJs.includes('DEFAULT_HISTORY_SNAPSHOT_CACHE_MS'), true);
+  assert.equal(historyPageJs.includes('loadCachedSearchSnapshot()'), true);
+  assert.equal(historyPageJs.includes('saveLastSearchSnapshot(requestedQuery, requestedRange'), true);
+  assert.equal(historyPageJs.includes('searchSnapshot = cachedSnapshot;'), true);
+  assert.equal(historyPageJs.includes('searchSnapshot = createSearchSnapshot(loadedHistorySnapshot'), true);
+  assert.equal(historyPageJs.includes('async function init() {\n  setLoading();'), false);
+  assert.equal(historyPageJs.includes('runSearch({ forceRefresh: true });'), true);
+  assert.equal(historyPageJs.includes('historySnapshotLoader.invalidate();'), true);
+});
+
+test('renamed pages remain visible outside the selected time window', () => {
+  assert.equal(historyPageJs.includes('getTimeExemptRenameLookupTexts(windowItems, titleOverrides)'), true);
+  assert.equal(historyPageJs.includes('historySnapshotLoader.load(`renamed:${text}`, 0, text)'), true);
+  assert.equal(historyPageJs.includes("historySnapshotLoader.load('all', 0)"), false);
+  assert.equal(historyPageJs.includes('appendTimeExemptRenamedItems(windowItems, titleOverrides, {'), true);
+  assert.equal(historyPageJs.includes('allHistoryItems'), true);
+  assert.equal(historyDataJs.includes('existingPageKeys.has(pageKey)'), true);
+  assert.equal(historyDataJs.includes('renamedPageKeys.has(pageKey)'), true);
+  assert.equal(historyPageJs.includes('void runSearch({ forceRefresh: true });'), true);
 });
 
 test('history surfaces do not expose a max results control', () => {
@@ -167,7 +184,8 @@ test('result metadata omits merge count and shortens dates for the current year'
   assert.equal(historyPageJs.includes('currentYearDateFormatter'), true);
   assert.equal(historyPageJs.includes('otherYearDateFormatter'), true);
   assert.equal(historyPageJs.includes("date.getFullYear() === new Date().getFullYear()"), true);
-  assert.equal(historyPageJs.includes('`至少 ${visitCount} 次访问`'), true);
+  assert.equal(historyPageJs.includes('createTag(`${visitCount} 次访问`)'), true);
+  assert.equal(historyPageJs.includes('至少 ${visitCount} 次访问'), false);
 });
 
 test('popup search controls stay on one row despite mobile media rules', () => {
@@ -255,6 +273,8 @@ test('history search surfaces restore and remember the last search state', () =>
   assert.equal(historyPageJs.includes('showRenamedOnly = Boolean(state.showRenamedOnly)'), true);
   assert.equal(historyPageJs.includes('showMinimalMode = Boolean(state.showMinimalMode)'), true);
   assert.equal(historyPageJs.includes('rememberCurrentSearchState'), true);
+  assert.equal(historyPageJs.includes('void rememberCurrentSearchState();'), true);
+  assert.equal(historyPageJs.includes('await rememberCurrentSearchState();'), false);
 });
 
 test('popup selects the restored query when opened from the shortcut', () => {
@@ -347,13 +367,17 @@ test('rename summary metric toggles a renamed-pages filter', () => {
 });
 
 test('minimal summary metric only changes presentation and never bypasses safe dedupe', () => {
+  const css = readText('../src/styles.css');
+
   assert.equal(historyPageJs.includes("const MINIMAL_DEDUPE_MODE = 'minimal-service';"), false);
   assert.equal(historyPageJs.includes('let showMinimalMode = false;'), true);
   assert.equal(historyPageJs.includes('createMinimalModeMetric'), true);
   assert.equal(historyPageJs.includes('showMinimalMode = !showMinimalMode;'), true);
   assert.equal(historyPageJs.includes('dedupeHistoryItems(titleDedupedItems, MINIMAL_DEDUPE_MODE)'), false);
-  assert.equal(historyPageJs.includes('const pageItems = dedupeHistoryItems(urlItems, DEDUPE_MODE);'), true);
-  assert.equal(historyPageJs.includes('if (!showMinimalMode) {'), true);
+  assert.equal(historyPageJs.includes('return dedupeHistoryItems(urlItems, DEDUPE_MODE);'), true);
+  assert.equal(historyPageJs.includes("document.body.classList.toggle('minimal-mode', showMinimalMode)"), true);
+  assert.equal(historyPageJs.includes('syncMinimalModePresentation(metric);'), true);
+  assert.match(css, /\.minimal-mode \.result-url \{[\s\S]*?display: none;/);
   assert.equal(historyPageJs.includes("metricLabel.textContent = '极简';"), true);
   assert.equal(historyPageJs.includes("metricValue.textContent = showMinimalMode ? 'On' : 'Off';"), false);
 });
@@ -446,6 +470,20 @@ test('rename shortcut has a focused extension window surface', () => {
   assert.equal(backgroundJs.includes('chrome.windows.create'), true);
 });
 
+test('rename success uses an Ant-style floating message while errors stay inline', () => {
+  const css = readText('../src/styles.css');
+
+  assert.equal(renameHtml.indexOf('id="rename-status"') < renameHtml.indexOf('class="rename-actions"'), true);
+  assert.equal(renamePageJs.includes("showSuccessMessage('保存成功')"), true);
+  assert.equal(renamePageJs.includes("showSuccessMessage('已还原原名')"), true);
+  assert.equal(renamePageJs.includes("element.className = 'rename-message';"), true);
+  assert.equal(renamePageJs.includes("globalThis.setTimeout(closeWindow, 1200)"), true);
+  assert.match(css, /\.rename-status \{[\s\S]*?color: var\(--danger\);/);
+  assert.match(css, /\.rename-status:empty \{[\s\S]*?display: none;/);
+  assert.match(css, /\.rename-message \{[\s\S]*?position: fixed;[\s\S]*?top: 16px;/);
+  assert.match(css, /\.rename-message-icon \{[\s\S]*?color: var\(--success\);/);
+});
+
 test('rename shortcut popup is centered over the active browser window', () => {
   assert.equal(backgroundJs.includes('chrome.windows.get(windowId'), true);
   assert.equal(backgroundJs.includes('createRenameWindow(draft.id, tab.windowId)'), true);
@@ -476,6 +514,11 @@ test('inline rename dialog can save, restore, cancel, and close with Escape', ()
   assert.equal(renameOverlayJs.includes("restoreButton.textContent = '还原原名';"), true);
   assert.equal(renameOverlayJs.includes("cancelButton.textContent = '取消';"), true);
   assert.equal(renameOverlayJs.includes("event.key === 'Escape'"), true);
+  assert.equal(renameOverlayJs.includes("showSuccessMessage(shadow, overlay, '保存成功')"), true);
+  assert.equal(renameOverlayJs.includes("showSuccessMessage(shadow, overlay, '已还原原名')"), true);
+  assert.equal(renameOverlayJs.includes("globalThis.setTimeout(close, 1200)"), true);
+  assert.equal(renameOverlayJs.includes('color: #389e0d;'), true);
+  assert.equal(renameOverlayJs.includes('restoreButton.dataset.restoreAvailable'), true);
 });
 
 test('inline rename input isolates keystrokes from host page shortcuts', () => {
