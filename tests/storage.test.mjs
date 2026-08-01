@@ -15,18 +15,83 @@ import {
   updateCapturedTitleRecords
 } from '../src/storage.js';
 
-test('last search snapshot reuses only the same normalized query and range', async () => {
+test('processed page snapshot reuses the same range across different queries', async () => {
   const sessionValues = {};
   globalThis.chrome = createStorageChrome({}, sessionValues);
 
   try {
     const items = [{ title: 'Docs', url: 'https://example.com/docs' }];
-    const snapshot = { pageItemCount: 20, matchedItems: items };
+    const snapshot = { pageItems: items };
     await saveLastSearchSnapshot('  MEEGO   story  ', 'week', snapshot);
 
     assert.deepEqual(await loadLastSearchSnapshot('MEEGO story', 'week'), snapshot);
-    assert.equal(await loadLastSearchSnapshot('another query', 'week'), null);
+    assert.deepEqual(await loadLastSearchSnapshot('another query', 'week'), snapshot);
     assert.equal(await loadLastSearchSnapshot('MEEGO story', 'month'), null);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('oversized processed snapshots skip session persistence and clear stale cache', async () => {
+  const sessionValues = {
+    'deduped-history-last-search-snapshot': {
+      version: 5,
+      range: 'week',
+      pageItems: [{ title: 'stale' }]
+    }
+  };
+  globalThis.chrome = createStorageChrome({}, sessionValues);
+
+  try {
+    await saveLastSearchSnapshot('', 'all', {
+      pageItems: [{ title: '大'.repeat(3 * 1024 * 1024) }]
+    });
+
+    assert.equal(await loadLastSearchSnapshot('', 'all'), null);
+    assert.equal(sessionValues['deduped-history-last-search-snapshot'], undefined);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('last search snapshot rejects results produced by an older matching algorithm', async () => {
+  const sessionValues = {
+    'deduped-history-last-search-snapshot': {
+      version: 3,
+      query: '大模型',
+      range: 'week',
+      pageItemCount: 3,
+      matchedItems: []
+    }
+  };
+  globalThis.chrome = createStorageChrome({}, sessionValues);
+
+  try {
+    assert.equal(await loadLastSearchSnapshot('大模型', 'week'), null);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('renaming a page invalidates the processed search snapshot', async () => {
+  const values = {};
+  const sessionValues = {};
+  globalThis.chrome = createStorageChrome(values, sessionValues);
+
+  try {
+    const snapshot = {
+      pageItems: [{ title: '旧标题', url: 'https://example.com/docs/abc12345' }]
+    };
+    await saveLastSearchSnapshot('大模型', 'month', snapshot);
+    assert.deepEqual(await loadLastSearchSnapshot('大模型', 'month'), snapshot);
+
+    await saveTitleOverride(
+      'https://example.com/docs/abc12345',
+      '大模型知识面试一本通',
+      { targetUrl: 'https://example.com/docs/abc12345' }
+    );
+
+    assert.equal(await loadLastSearchSnapshot('大模型', 'month'), null);
   } finally {
     delete globalThis.chrome;
   }
@@ -125,7 +190,7 @@ test('legacy query-level renames collapse by path and keep the latest record', (
   );
 });
 
-test('loading version 3 overrides persists the first-resource-id migration', async () => {
+test('loading version 3 overrides persists the latest page-identity migration', async () => {
   const storageKey = 'deduped-history-title-overrides';
   const migrationKey = 'deduped-history-title-overrides-migration';
   const baseUrl = 'https://example.com/projects/prj12345';
@@ -153,8 +218,41 @@ test('loading version 3 overrides persists the first-resource-id migration', asy
 
     assert.equal(overrides.size, 1);
     assert.equal(overrides.get(baseUrl).title, '最新实例名');
-    assert.equal(values[migrationKey], 4);
+    assert.equal(values[migrationKey], 5);
     assert.deepEqual(Object.keys(values[storageKey]), [baseUrl]);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('loading version 4 overrides migrates Feishu tenant domains to one wiki identity', async () => {
+  const storageKey = 'deduped-history-title-overrides';
+  const migrationKey = 'deduped-history-title-overrides-migration';
+  const token = 'M1Cew0iYaiH9jfkeD5XcXEuZn3d';
+  const renameUrl = `https://my.feishu.cn/wiki/${token}`;
+  const values = {
+    [migrationKey]: 4,
+    [storageKey]: {
+      [renameUrl]: {
+        title: '大模型知识面试一本通',
+        targetUrl: renameUrl,
+        updatedAt: 200
+      }
+    }
+  };
+  globalThis.chrome = createStorageChrome(values);
+
+  try {
+    const overrides = await loadTitleOverrides();
+    const canonicalKey = `https://feishu.cn/wiki/${token}`;
+
+    assert.deepEqual([...overrides], [[canonicalKey, {
+      title: '大模型知识面试一本通',
+      targetUrl: renameUrl,
+      updatedAt: 200
+    }]]);
+    assert.equal(values[migrationKey], 5);
+    assert.deepEqual(Object.keys(values[storageKey]), [canonicalKey]);
   } finally {
     delete globalThis.chrome;
   }
@@ -313,6 +411,12 @@ function createStorageChrome(values, sessionValues = {}) {
     set(nextValues, callback) {
       setTimeout(() => {
         Object.assign(areaValues, structuredClone(nextValues));
+        callback();
+      }, 0);
+    },
+    remove(key, callback) {
+      setTimeout(() => {
+        delete areaValues[key];
         callback();
       }, 0);
     }

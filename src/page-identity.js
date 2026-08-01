@@ -25,6 +25,20 @@ const RESOURCE_ID_QUERY_PARAM_NAMES = new Map([
 ]);
 
 const HASH_ROUTE_PATTERN = /^#!?\//;
+const FEISHU_RESOURCE_ROUTE_SEGMENTS = new Set([
+  'base',
+  'docs',
+  'docx',
+  'file',
+  'mindnotes',
+  'sheets',
+  'wiki'
+]);
+const FEISHU_DOMAIN_ROOTS = [
+  'feishu.cn',
+  'larksuite.com',
+  'larkoffice.com'
+];
 const STATEFUL_ROUTE_SEGMENTS = new Set([
   'keyword_search'
 ]);
@@ -85,8 +99,7 @@ function getUrlPageIdentityKey(inputUrl) {
 
   const resourcePath = getResourcePath(url, 'first');
   const resourceQuery = resourcePath.hasResourceId ? '' : getResourceQuery(url);
-  const port = url.port ? `:${url.port}` : '';
-  const origin = `${url.protocol}//${url.hostname.toLowerCase()}${port}`;
+  const origin = getPageOrigin(url, resourcePath);
   const path = resourcePath.hasResourceId ? resourcePath.value : (url.pathname || '/');
   return `${origin}${path}${resourceQuery}`;
 }
@@ -155,8 +168,7 @@ function getResourceIdentityFromUrl(inputUrl, position) {
     return '';
   }
 
-  const port = url.port ? `:${url.port}` : '';
-  const origin = `${url.protocol}//${url.hostname.toLowerCase()}${port}`;
+  const origin = getPageOrigin(url, resourcePath);
   const path = resourcePath.hasResourceId ? resourcePath.value : (url.pathname || '/');
   return `${origin}${path}${resourceQuery}`;
 }
@@ -192,6 +204,31 @@ function getResourcePath(url, position) {
     value: `/${identitySegments.map(encodePathSegment).join('/')}`,
     hasResourceId: true
   };
+}
+
+function getPageOrigin(url, resourcePath) {
+  const hostname = url.hostname.toLowerCase();
+  const port = url.port ? `:${url.port}` : '';
+
+  if (!port && resourcePath.hasResourceId && isFeishuResourceRoute(resourcePath.value)) {
+    const domainRoot = FEISHU_DOMAIN_ROOTS.find((root) => (
+      hostname === root || hostname.endsWith(`.${root}`)
+    ));
+
+    if (domainRoot) {
+      return `${url.protocol}//${domainRoot}`;
+    }
+  }
+
+  return `${url.protocol}//${hostname}${port}`;
+}
+
+function isFeishuResourceRoute(resourcePath) {
+  const firstSegment = String(resourcePath ?? '')
+    .split('/')
+    .map((segment) => safeDecodeUrlPath(segment).trim().toLowerCase())
+    .find(Boolean);
+  return FEISHU_RESOURCE_ROUTE_SEGMENTS.has(firstSegment);
 }
 
 function getResourceQuery(url) {

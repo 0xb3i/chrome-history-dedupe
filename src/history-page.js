@@ -9,7 +9,8 @@ import {
   formatHistoryUrlForGroup,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
-  groupHistoryItems
+  groupHistoryItems,
+  prepareHistoryItemsForSearch
 } from './history-utils.js';
 import {
   appendTimeExemptRenamedItems,
@@ -70,9 +71,14 @@ let showRenamedOnly = false;
 let showMinimalMode = false;
 let latestSearchRequestId = 0;
 let historySnapshot = [];
+let hasHistorySnapshot = false;
+let pageItemsSnapshot = [];
+let pageItemsRange = '';
+let hasPageItemsSnapshot = false;
 let searchSnapshot = null;
 let historySnapshotLoadedAt = 0;
 let snapshotRenderTimer = null;
+let pageItemsRebuildTimer = null;
 
 const currentYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   month: 'long',
@@ -86,7 +92,7 @@ const otherYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
 });
 form.addEventListener('submit', (event) => {
   event.preventDefault();
-  runSearch({ forceRefresh: true });
+  runSearch();
 });
 setupRangeSelect();
 shortcutSettingsButton?.addEventListener('click', () => {
@@ -131,7 +137,13 @@ async function init() {
     const cachedSnapshot = await loadCachedSearchSnapshot();
 
     if (cachedSnapshot) {
-      searchSnapshot = cachedSnapshot;
+      pageItemsSnapshot = cachedSnapshot.pageItems;
+      pageItemsRange = rangeSelect.value;
+      hasPageItemsSnapshot = true;
+      searchSnapshot = createSearchSnapshotFromPageItems(
+        pageItemsSnapshot,
+        queryInput.value
+      );
       historySnapshotLoadedAt = Date.now();
       renderHistorySnapshot();
     } else {
@@ -147,10 +159,19 @@ async function runSearch(options = {}) {
   const requestedQuery = queryInput.value;
   const requestedRange = rangeSelect.value;
 
-  setLoading();
-
   try {
     void rememberCurrentSearchState();
+    if (!options.forceRefresh && hasPageItemsSnapshot && pageItemsRange === requestedRange) {
+      setLoading();
+      searchSnapshot = createSearchSnapshotFromPageItems(pageItemsSnapshot, requestedQuery);
+      renderHistorySnapshot();
+      void saveLastSearchSnapshot(requestedQuery, requestedRange, {
+        pageItems: pageItemsSnapshot
+      }).catch(() => {});
+      return;
+    }
+
+    setLoading();
     if (options.forceRefresh) {
       historySnapshotLoader.invalidate();
     }
@@ -161,11 +182,17 @@ async function runSearch(options = {}) {
     }
 
     historySnapshot = loadedHistorySnapshot;
-    searchSnapshot = createSearchSnapshot(loadedHistorySnapshot, requestedQuery);
+    hasHistorySnapshot = true;
+    pageItemsSnapshot = createPageItems(loadedHistorySnapshot);
+    pageItemsRange = requestedRange;
+    hasPageItemsSnapshot = true;
+    searchSnapshot = createSearchSnapshotFromPageItems(pageItemsSnapshot, requestedQuery);
     historySnapshotLoadedAt = Date.now();
     renderHistorySnapshot();
-    void saveLastSearchSnapshot(requestedQuery, requestedRange, searchSnapshot).catch(() => {
-      // A session cache speeds up reopening, but search results remain usable without it.
+    void saveLastSearchSnapshot(requestedQuery, requestedRange, {
+      pageItems: pageItemsSnapshot
+    }).catch(() => {
+      // A session cache speeds up reopening and later queries, but search remains usable without it.
     });
   } catch (error) {
     if (isLatestSearchRequest(searchRequestId)) {
@@ -229,6 +256,10 @@ function renderHistorySnapshot() {
 
 function createSearchSnapshot(items, query) {
   const pageItems = createPageItems(items);
+  return createSearchSnapshotFromPageItems(pageItems, query);
+}
+
+function createSearchSnapshotFromPageItems(pageItems, query) {
   return {
     pageItemCount: pageItems.length,
     matchedItems: filterHistoryItemsByQuery(pageItems, String(query ?? '').trim())
@@ -239,7 +270,7 @@ function createPageItems(items) {
   const capturedTitleItems = applyCapturedTitlesToItems(items, capturedPageTitles);
   const renamedItems = applyTitleOverridesToItems(capturedTitleItems, titleOverrides);
   const urlItems = dedupeHistoryItems(renamedItems, 'normalized-url');
-  return dedupeHistoryItems(urlItems, DEDUPE_MODE);
+  return prepareHistoryItemsForSearch(dedupeHistoryItems(urlItems, DEDUPE_MODE));
 }
 
 function scheduleSnapshotRender() {
@@ -484,11 +515,13 @@ function renderResults(groups, options = {}) {
   }
 
   emptyState.hidden = true;
+  const fragment = document.createDocumentFragment();
 
   groups.forEach((group) => {
     const isOpen = options.expandAll || (openGroupKeys ? openGroupKeys.has(group.key) : false);
-    results.append(createGroupItem(group, isOpen));
+    fragment.append(createGroupItem(group, isOpen));
   });
+  results.append(fragment);
 }
 
 function renderFlatResults(items) {
@@ -501,10 +534,12 @@ function renderFlatResults(items) {
   }
 
   emptyState.hidden = true;
+  const fragment = document.createDocumentFragment();
 
   for (const item of items) {
-    results.append(createResultItem(item));
+    fragment.append(createResultItem(item));
   }
+  results.append(fragment);
 }
 
 function applyPinnedStateToItems(items, pinnedKeys) {
@@ -1177,17 +1212,14 @@ function addStorageChangeListener() {
 
     if (changes[TITLE_OVERRIDES_STORAGE_KEY]) {
       titleOverrides = normalizePageTitleOverrideMap(changes[TITLE_OVERRIDES_STORAGE_KEY].newValue);
-      void runSearch({ forceRefresh: true });
+      schedulePageItemsRebuild();
     }
 
     if (changes[CAPTURED_PAGE_TITLES_STORAGE_KEY]) {
       capturedPageTitles = normalizeCapturedPageMap(
         changes[CAPTURED_PAGE_TITLES_STORAGE_KEY].newValue
       );
-      if (historySnapshot.length > 0) {
-        searchSnapshot = createSearchSnapshot(historySnapshot, queryInput.value);
-      }
-      scheduleSnapshotRender();
+      schedulePageItemsRebuild();
     }
 
     if (changes[GROUP_NAME_OVERRIDES_STORAGE_KEY]) {
@@ -1203,10 +1235,51 @@ function addHistoryChangeListeners() {
   const invalidateSnapshots = () => {
     historySnapshotLoader.invalidate();
     historySnapshotLoadedAt = 0;
+    historySnapshot = [];
+    hasHistorySnapshot = false;
+    pageItemsSnapshot = [];
+    pageItemsRange = '';
+    hasPageItemsSnapshot = false;
+    searchSnapshot = null;
   };
 
   globalThis.chrome?.history?.onVisited?.addListener(invalidateSnapshots);
   globalThis.chrome?.history?.onVisitRemoved?.addListener(invalidateSnapshots);
+}
+
+function rebuildPageItemsFromLoadedHistory() {
+  if (!hasHistorySnapshot) {
+    pageItemsSnapshot = [];
+    pageItemsRange = '';
+    hasPageItemsSnapshot = false;
+    searchSnapshot = null;
+    return;
+  }
+
+  pageItemsSnapshot = createPageItems(historySnapshot);
+  pageItemsRange = rangeSelect.value;
+  hasPageItemsSnapshot = true;
+  searchSnapshot = createSearchSnapshotFromPageItems(pageItemsSnapshot, queryInput.value);
+  void saveLastSearchSnapshot(queryInput.value, pageItemsRange, {
+    pageItems: pageItemsSnapshot
+  }).catch(() => {});
+}
+
+function schedulePageItemsRebuild() {
+  if (pageItemsRebuildTimer !== null) {
+    clearTimeout(pageItemsRebuildTimer);
+  }
+
+  pageItemsRebuildTimer = setTimeout(() => {
+    pageItemsRebuildTimer = null;
+    if (hasHistorySnapshot) {
+      rebuildPageItemsFromLoadedHistory();
+      renderHistorySnapshot();
+      return;
+    }
+
+    void runSearch({ forceRefresh: true });
+  }, SNAPSHOT_RENDER_DEBOUNCE_MS);
 }
 
 function formatGroupMeta(group) {

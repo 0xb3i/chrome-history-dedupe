@@ -13,9 +13,9 @@ export function createHistorySnapshotLoader(options = {}) {
   );
   const tasks = new Map();
   const snapshots = new Map();
+  let generation = 0;
 
-  return {
-    load(rangeKey, startTime, text = '') {
+  const load = (rangeKey, startTime, text = '') => {
       const cachedSnapshot = snapshots.get(rangeKey);
       const currentTime = now();
 
@@ -29,9 +29,13 @@ export function createHistorySnapshotLoader(options = {}) {
       }
 
       const endTime = currentTime;
+      const taskGeneration = generation;
       const task = Promise.resolve()
         .then(() => searchHistory({ text, startTime, endTime }, apiOptions))
         .then((items) => {
+          if (taskGeneration !== generation) {
+            return load(rangeKey, startTime, text);
+          }
           snapshots.set(rangeKey, { items, loadedAt: now() });
           return items;
         });
@@ -44,8 +48,13 @@ export function createHistorySnapshotLoader(options = {}) {
       };
       void task.then(clearTask, clearTask);
       return task;
-    },
+  };
+
+  return {
+    load,
     invalidate(rangeKey) {
+      generation += 1;
+      tasks.clear();
       if (rangeKey === undefined) {
         snapshots.clear();
         return;

@@ -11,6 +11,8 @@ const DISPLAY_NAME_COLLATOR = new Intl.Collator('zh-CN', {
   numeric: true,
   sensitivity: 'base'
 });
+const HAN_KEYWORD_PATTERN = /^\p{Script=Han}{3,}$/u;
+const MAX_HAN_SUBSEQUENCE_SKIPS = 4;
 export function normalizeHistoryKey(item, mode = DEFAULT_MODE) {
   const rawUrl = String(item?.dedupeUrl || item?.url || '');
 
@@ -229,6 +231,15 @@ export function applyCapturedTitlesToItems(items, capturedTitles = new Map()) {
   const titles = capturedTitles instanceof Map
     ? capturedTitles
     : new Map(Object.entries(capturedTitles ?? {}));
+  const titlesByPageIdentity = new Map();
+
+  for (const [key, value] of titles) {
+    const pageKey = getPageIdentityKey(key);
+
+    if (pageKey && !titlesByPageIdentity.has(pageKey)) {
+      titlesByPageIdentity.set(pageKey, value);
+    }
+  }
 
   return items.map((item) => {
     const titleKey = getHistoryItemCapturedTitleKey(item);
@@ -241,7 +252,8 @@ export function applyCapturedTitlesToItems(items, capturedTitles = new Map()) {
     );
     const exactCapturedValue = titles.get(titleKey);
     const capturedValue = exactCapturedValue ??
-      fallbackKeys.map((key) => titles.get(key)).find((value) => value !== undefined);
+      fallbackKeys.map((key) => titles.get(key)).find((value) => value !== undefined) ??
+      titlesByPageIdentity.get(getPageIdentityKey(item?.url));
     const capturedPage = normalizeCapturedPageValue(capturedValue);
     const capturedTitle = getUsableOverrideTitle(capturedPage.title);
     const capturedResolvedUrl = getUsableUrl(capturedPage.resolvedUrl);
@@ -280,15 +292,78 @@ export function filterHistoryItemsByQuery(items, query) {
   const searchesUrl = isUrlSearchQuery(query);
 
   return items.filter((item) => {
-    const searchableValues = searchesUrl
-      ? getItemSearchableUrls(item)
-      : [
-          ...getItemSearchableTitles(item),
-          ...getItemSearchableUrls(item).map(getPlainUrlSearchText)
-        ];
-    const searchableText = normalizeSearchText(searchableValues.join(' '));
-    return queryKeywords.every((keyword) => searchableText.includes(keyword));
+    const normalizedValues = getPreparedSearchValues(item, searchesUrl);
+    const searchableText = normalizedValues.join(' ');
+    return queryKeywords.every((keyword) => (
+      searchableText.includes(keyword) ||
+      (!searchesUrl && normalizedValues.some((value) => matchesBoundedHanSubsequence(
+        value,
+        keyword
+      )))
+    ));
   });
+}
+
+export function prepareHistoryItemsForSearch(items) {
+  return items.map((item) => {
+    const searchableUrls = getItemSearchableUrls(item);
+    return {
+      ...item,
+      normalizedSearchTitles: getItemSearchableTitles(item).map(normalizeSearchText),
+      normalizedPlainUrls: searchableUrls.map(getPlainUrlSearchText).map(normalizeSearchText),
+      normalizedSearchUrls: searchableUrls.map(normalizeSearchText)
+    };
+  });
+}
+
+function getPreparedSearchValues(item, searchesUrl) {
+  if (searchesUrl && Array.isArray(item?.normalizedSearchUrls)) {
+    return item.normalizedSearchUrls;
+  }
+
+  if (
+    !searchesUrl &&
+    Array.isArray(item?.normalizedSearchTitles) &&
+    Array.isArray(item?.normalizedPlainUrls)
+  ) {
+    return [...item.normalizedSearchTitles, ...item.normalizedPlainUrls];
+  }
+
+  const searchableUrls = getItemSearchableUrls(item);
+  const searchableValues = searchesUrl
+    ? searchableUrls
+    : [...getItemSearchableTitles(item), ...searchableUrls.map(getPlainUrlSearchText)];
+  return searchableValues.map(normalizeSearchText);
+}
+
+function matchesBoundedHanSubsequence(value, keyword) {
+  if (!HAN_KEYWORD_PATTERN.test(keyword)) {
+    return false;
+  }
+
+  for (let start = value.indexOf(keyword[0]); start >= 0; start = value.indexOf(keyword[0], start + 1)) {
+    let valueIndex = start + 1;
+    let keywordIndex = 1;
+    let skippedCount = 0;
+
+    while (valueIndex < value.length && keywordIndex < keyword.length) {
+      if (value[valueIndex] === keyword[keywordIndex]) {
+        keywordIndex += 1;
+      } else {
+        skippedCount += 1;
+        if (skippedCount > MAX_HAN_SUBSEQUENCE_SKIPS) {
+          break;
+        }
+      }
+      valueIndex += 1;
+    }
+
+    if (keywordIndex === keyword.length) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function isUrlSearchQuery(query) {

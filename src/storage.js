@@ -12,7 +12,9 @@ export const CAPTURED_PAGE_TITLES_STORAGE_KEY = 'deduped-history-captured-page-t
 const RENAME_DRAFT_TTL_MS = 15 * 60 * 1000;
 const MAX_CAPTURED_PAGE_TITLES = 5000;
 const SEARCH_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter', 'all']);
-const TITLE_OVERRIDES_MIGRATION_VERSION = 4;
+const LAST_SEARCH_SNAPSHOT_VERSION = 5;
+const MAX_LAST_SEARCH_SNAPSHOT_BYTES = 8 * 1024 * 1024;
+const TITLE_OVERRIDES_MIGRATION_VERSION = 5;
 const STORAGE_MUTATION_LOCK_NAME = 'deduped-history-storage-mutation';
 let storageMutationQueue = Promise.resolve();
 
@@ -120,6 +122,7 @@ export async function saveCapturedPageTitle(key, title, options = {}) {
       .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
       .slice(0, MAX_CAPTURED_PAGE_TITLES);
     await setStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, Object.fromEntries(recentRecords));
+    await invalidateLastSearchSnapshot();
   });
 }
 
@@ -174,18 +177,15 @@ export async function loadLastSearchSnapshot(query, range) {
   const snapshot = storedItems[LAST_SEARCH_SNAPSHOT_STORAGE_KEY];
 
   if (
-    snapshot?.version !== 2 ||
-    snapshot.query !== normalizeTitle(query) ||
+    snapshot?.version !== LAST_SEARCH_SNAPSHOT_VERSION ||
     snapshot.range !== normalizeSearchRange(range) ||
-    !Number.isFinite(snapshot.pageItemCount) ||
-    !Array.isArray(snapshot.matchedItems)
+    !Array.isArray(snapshot.pageItems)
   ) {
     return null;
   }
 
   return {
-    pageItemCount: snapshot.pageItemCount,
-    matchedItems: snapshot.matchedItems
+    pageItems: snapshot.pageItems
   };
 }
 
@@ -194,21 +194,45 @@ export async function saveLastSearchSnapshot(query, range, snapshot) {
 
   if (
     !storageArea ||
-    !Number.isFinite(snapshot?.pageItemCount) ||
-    !Array.isArray(snapshot?.matchedItems)
+    !Array.isArray(snapshot?.pageItems)
   ) {
     return;
   }
 
+  const storedSnapshot = {
+    version: LAST_SEARCH_SNAPSHOT_VERSION,
+    range: normalizeSearchRange(range),
+    pageItems: snapshot.pageItems
+  };
+
+  if (getSerializedByteLength(storedSnapshot) > MAX_LAST_SEARCH_SNAPSHOT_BYTES) {
+    await chromeStorageRemove(storageArea, LAST_SEARCH_SNAPSHOT_STORAGE_KEY);
+    return;
+  }
+
   await chromeStorageSet(storageArea, {
-    [LAST_SEARCH_SNAPSHOT_STORAGE_KEY]: {
-      version: 2,
-      query: normalizeTitle(query),
-      range: normalizeSearchRange(range),
-      pageItemCount: snapshot.pageItemCount,
-      matchedItems: snapshot.matchedItems
-    }
+    [LAST_SEARCH_SNAPSHOT_STORAGE_KEY]: storedSnapshot
   });
+}
+
+export async function invalidateLastSearchSnapshot() {
+  const storageArea = getChromeSessionStorageArea();
+
+  if (!storageArea) {
+    return;
+  }
+
+  await chromeStorageRemove(storageArea, LAST_SEARCH_SNAPSHOT_STORAGE_KEY);
+}
+
+function getSerializedByteLength(value) {
+  const serializedValue = JSON.stringify(value);
+
+  if (typeof TextEncoder === 'function') {
+    return new TextEncoder().encode(serializedValue).byteLength;
+  }
+
+  return new Blob([serializedValue]).size;
 }
 
 export async function saveGroupNameOverride(key, name) {
@@ -281,6 +305,7 @@ export async function saveTitleOverride(key, title, options = {}) {
       [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(overrides),
       [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION
     });
+    await invalidateLastSearchSnapshot();
   });
 }
 
@@ -305,6 +330,7 @@ export async function deleteTitleOverrides(keys) {
       [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(overrides),
       [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION
     });
+    await invalidateLastSearchSnapshot();
   });
 }
 
@@ -641,6 +667,21 @@ function chromeStorageGet(storageArea, key) {
 function chromeStorageSet(storageArea, value) {
   return new Promise((resolve, reject) => {
     storageArea.set(value, () => {
+      const lastError = globalThis.chrome?.runtime?.lastError;
+
+      if (lastError) {
+        reject(new Error(lastError.message));
+        return;
+      }
+
+      resolve();
+    });
+  });
+}
+
+function chromeStorageRemove(storageArea, key) {
+  return new Promise((resolve, reject) => {
+    storageArea.remove(key, () => {
       const lastError = globalThis.chrome?.runtime?.lastError;
 
       if (lastError) {

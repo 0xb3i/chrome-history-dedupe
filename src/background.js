@@ -4,12 +4,14 @@ import {
 } from './history-utils.js';
 import {
   deleteTitleOverrides,
+  invalidateLastSearchSnapshot,
   loadTitleOverrides,
   saveCapturedPageTitle,
   saveRenameDraft,
   saveTitleOverride
 } from './storage.js';
 import { createNavigationTracker } from './navigation-tracker.js';
+import { getCenteredCoordinate } from './window-placement.js';
 
 const RENAME_CURRENT_PAGE_COMMAND = 'rename-current-page';
 const RENAME_WINDOW_WIDTH = 480;
@@ -38,6 +40,12 @@ globalThis.chrome?.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
 });
 globalThis.chrome?.tabs?.onRemoved?.addListener((tabId) => {
   navigationTracker.remove(tabId);
+});
+globalThis.chrome?.history?.onVisited?.addListener(() => {
+  void invalidateLastSearchSnapshot();
+});
+globalThis.chrome?.history?.onVisitRemoved?.addListener(() => {
+  void invalidateLastSearchSnapshot();
 });
 
 captureOpenTabTitles();
@@ -106,7 +114,7 @@ async function openRenameWindowForCurrentPage() {
 
     const draft = await createRenameDraft(tab);
 
-    if ((await isFullscreenWindow(tab.windowId)) && (await openInlineRenameDialog(tab, draft))) {
+    if (await openInlineRenameDialog(tab, draft)) {
       return;
     }
 
@@ -114,15 +122,6 @@ async function openRenameWindowForCurrentPage() {
     await createRenameWindow(draft.id, tab.windowId);
   } catch {
     // Keyboard commands have no visible surface for errors; failing closed is safest.
-  }
-}
-
-async function isFullscreenWindow(windowId) {
-  try {
-    const window = await getWindow(windowId);
-    return window?.state === 'fullscreen';
-  } catch {
-    return false;
   }
 }
 
@@ -284,17 +283,6 @@ function getWindow(windowId) {
       resolve(window);
     });
   });
-}
-
-function getCenteredCoordinate(origin, outerSize, innerSize) {
-  const numericOrigin = Number(origin);
-  const numericOuterSize = Number(outerSize);
-
-  if (!Number.isFinite(numericOrigin) || !Number.isFinite(numericOuterSize)) {
-    return undefined;
-  }
-
-  return Math.max(0, Math.round(numericOrigin + (numericOuterSize - innerSize) / 2));
 }
 
 async function createRenameDraft(tab) {

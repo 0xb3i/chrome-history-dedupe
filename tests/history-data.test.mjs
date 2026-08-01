@@ -133,6 +133,35 @@ test('snapshot loader shares in-flight work, caches ranges, and supports invalid
   await fourth;
 });
 
+test('snapshot invalidation prevents an in-flight history request from restoring stale data', async () => {
+  const resolvers = [];
+  let searchCalls = 0;
+  const loader = createHistorySnapshotLoader({
+    now: () => 500,
+    searchHistory() {
+      searchCalls += 1;
+      return new Promise((resolve) => resolvers.push(resolve));
+    }
+  });
+
+  const staleLoad = loader.load('week', 100);
+  await Promise.resolve();
+  loader.invalidate();
+  const freshLoad = loader.load('week', 100);
+  await Promise.resolve();
+  assert.equal(searchCalls, 2);
+  resolvers.shift()([historyItem('https://example.com/stale', 200)]);
+  resolvers.shift()([historyItem('https://example.com/fresh', 300)]);
+
+  assert.deepEqual((await staleLoad).map((item) => item.url), ['https://example.com/fresh']);
+  assert.deepEqual((await freshLoad).map((item) => item.url), ['https://example.com/fresh']);
+  assert.deepEqual(
+    (await loader.load('week', 100)).map((item) => item.url),
+    ['https://example.com/fresh']
+  );
+  assert.equal(searchCalls, 2);
+});
+
 test('history search paginates with an endTime cursor and deduplicates URLs', async () => {
   const queries = [];
   const pages = [

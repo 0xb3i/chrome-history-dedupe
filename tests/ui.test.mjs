@@ -75,6 +75,12 @@ test('background captures final tab titles for current and future tabs', () => {
   assert.equal(backgroundJs.includes('navigationUrls'), true);
 });
 
+test('background invalidates processed search snapshots when history changes', () => {
+  assert.equal(backgroundJs.includes('history?.onVisited?.addListener'), true);
+  assert.equal(backgroundJs.includes('history?.onVisitRemoved?.addListener'), true);
+  assert.equal(backgroundJs.includes('invalidateLastSearchSnapshot'), true);
+});
+
 test('history page uses cached history search totals without per-URL visit requests', () => {
   assert.equal(historyDataJs.includes('const endTime = currentTime;'), true);
   assert.equal(historyDataJs.includes('searchHistory({ text, startTime, endTime }, apiOptions)'), true);
@@ -86,10 +92,13 @@ test('history page uses cached history search totals without per-URL visit reque
   assert.equal(historyDataJs.includes('DEFAULT_HISTORY_SNAPSHOT_CACHE_MS'), true);
   assert.equal(historyPageJs.includes('loadCachedSearchSnapshot()'), true);
   assert.equal(historyPageJs.includes('saveLastSearchSnapshot(requestedQuery, requestedRange'), true);
-  assert.equal(historyPageJs.includes('searchSnapshot = cachedSnapshot;'), true);
-  assert.equal(historyPageJs.includes('searchSnapshot = createSearchSnapshot(loadedHistorySnapshot'), true);
+  assert.equal(historyPageJs.includes('pageItemsSnapshot = cachedSnapshot.pageItems;'), true);
+  assert.equal(historyPageJs.includes('pageItemsSnapshot = createPageItems(loadedHistorySnapshot);'), true);
   assert.equal(historyPageJs.includes('async function init() {\n  setLoading();'), false);
-  assert.equal(historyPageJs.includes('runSearch({ forceRefresh: true });'), true);
+  assert.equal(historyPageJs.includes("form.addEventListener('submit'"), true);
+  assert.equal(historyPageJs.includes('if (!options.forceRefresh && hasPageItemsSnapshot'), true);
+  assert.equal(historyPageJs.includes('createSearchSnapshotFromPageItems(pageItemsSnapshot'), true);
+  assert.equal(historyPageJs.includes('prepareHistoryItemsForSearch'), true);
   assert.equal(historyPageJs.includes('historySnapshotLoader.invalidate();'), true);
 });
 
@@ -101,7 +110,9 @@ test('renamed pages remain visible outside the selected time window', () => {
   assert.equal(historyPageJs.includes('allHistoryItems'), true);
   assert.equal(historyDataJs.includes('existingPageKeys.has(pageKey)'), true);
   assert.equal(historyDataJs.includes('renamedPageKeys.has(pageKey)'), true);
-  assert.equal(historyPageJs.includes('void runSearch({ forceRefresh: true });'), true);
+  assert.equal(historyPageJs.includes('schedulePageItemsRebuild();'), true);
+  assert.equal(historyPageJs.includes('let pageItemsRebuildTimer = null;'), true);
+  assert.equal(historyPageJs.includes('pageItemsRebuildTimer = setTimeout'), true);
 });
 
 test('history surfaces do not expose a max results control', () => {
@@ -374,7 +385,10 @@ test('minimal summary metric only changes presentation and never bypasses safe d
   assert.equal(historyPageJs.includes('createMinimalModeMetric'), true);
   assert.equal(historyPageJs.includes('showMinimalMode = !showMinimalMode;'), true);
   assert.equal(historyPageJs.includes('dedupeHistoryItems(titleDedupedItems, MINIMAL_DEDUPE_MODE)'), false);
-  assert.equal(historyPageJs.includes('return dedupeHistoryItems(urlItems, DEDUPE_MODE);'), true);
+  assert.equal(
+    historyPageJs.includes('prepareHistoryItemsForSearch(dedupeHistoryItems(urlItems, DEDUPE_MODE))'),
+    true
+  );
   assert.equal(historyPageJs.includes("document.body.classList.toggle('minimal-mode', showMinimalMode)"), true);
   assert.equal(historyPageJs.includes('syncMinimalModePresentation(metric);'), true);
   assert.match(css, /\.minimal-mode \.result-url \{[\s\S]*?display: none;/);
@@ -429,7 +443,7 @@ test('renamed-pages filter renders bare result items without domain groups', () 
   assert.equal(historyPageJs.includes('currentGroups = showRenamedOnly ? [] : groupedItems;'), true);
   assert.equal(historyPageJs.includes('currentFlatItems = showRenamedOnly ? sortItemsByDisplayName(visibleItems) : [];'), true);
   assert.equal(historyPageJs.includes('renderFlatResults(applyPinnedStateToItems(currentFlatItems, pinnedUrlKeys));'), true);
-  assert.equal(historyPageJs.includes('results.append(createResultItem(item));'), true);
+  assert.equal(historyPageJs.includes('fragment.append(createResultItem(item));'), true);
   assert.equal(historyPageJs.includes('applyPinnedStateToItems'), true);
 });
 
@@ -484,7 +498,7 @@ test('rename success uses an Ant-style floating message while errors stay inline
   assert.match(css, /\.rename-message-icon \{[\s\S]*?color: var\(--success\);/);
 });
 
-test('rename shortcut popup is centered over the active browser window', () => {
+test('rename shortcut falls back to a popup centered over the active browser window', () => {
   assert.equal(backgroundJs.includes('chrome.windows.get(windowId'), true);
   assert.equal(backgroundJs.includes('createRenameWindow(draft.id, tab.windowId)'), true);
   assert.equal(backgroundJs.includes('const placement = await getCenteredWindowPlacement(windowId);'), true);
@@ -493,9 +507,8 @@ test('rename shortcut popup is centered over the active browser window', () => {
   assert.equal(backgroundJs.includes('...placement,'), true);
 });
 
-test('rename shortcut uses an inline dialog inside fullscreen browser windows', () => {
-  assert.equal(backgroundJs.includes("window?.state === 'fullscreen'"), true);
-  assert.equal(backgroundJs.includes('openInlineRenameDialog(tab, draft)'), true);
+test('rename shortcut prefers an inline dialog on the active page before using a popup', () => {
+  assert.equal(backgroundJs.includes('if (await openInlineRenameDialog(tab, draft))'), true);
   assert.equal(backgroundJs.includes("const INLINE_RENAME_SCRIPT = 'src/rename-overlay.js';"), true);
   assert.equal(backgroundJs.includes('chrome.scripting.executeScript'), true);
   assert.equal(backgroundJs.includes('chrome.tabs.sendMessage'), true);
@@ -503,6 +516,11 @@ test('rename shortcut uses an inline dialog inside fullscreen browser windows', 
   assert.equal(backgroundJs.includes('restoreInlineRename'), true);
   assert.equal(backgroundJs.includes('await saveRenameDraft(draft);'), true);
   assert.equal(backgroundJs.includes('await createRenameWindow(draft.id, tab.windowId);'), true);
+  assert.equal(
+    backgroundJs.indexOf('openInlineRenameDialog(tab, draft)') <
+      backgroundJs.indexOf('createRenameWindow(draft.id, tab.windowId)'),
+    true
+  );
 });
 
 test('inline rename dialog can save, restore, cancel, and close with Escape', () => {

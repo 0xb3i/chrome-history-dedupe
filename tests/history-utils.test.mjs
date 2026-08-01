@@ -442,7 +442,39 @@ test('page title mode ignores zero-width characters in titles', () => {
   assert.equal(results[0].id, 'zero-width-title');
   assert.equal(
     results[0].dedupeKey,
-    'https://bytedance.larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb'
+    'https://larkoffice.com/wiki/FkjVwUDZciqChskTeQcc2ATjnQb'
+  );
+});
+
+test('Feishu wiki renames follow the same token across my and tenant domains', () => {
+  const token = 'M1Cew0iYaiH9jfkeD5XcXEuZn3d';
+  const renameUrl = `https://my.feishu.cn/wiki/${token}`;
+  const historyUrl = `https://scnajei2ds6y.feishu.cn/wiki/${token}`;
+  const renamedItems = applyTitleOverridesToItems(
+    [{
+      id: 'tenant-history-entry',
+      title: '从1到∞: 多模态大模型知识面试一本通 - 飞书云文档',
+      url: historyUrl,
+      lastVisitTime: 100,
+      visitCount: 5
+    }],
+    new Map([[getHistoryItemTitleOverrideKey({ url: renameUrl }), {
+      title: '大模型知识面试一本通',
+      targetUrl: renameUrl,
+      updatedAt: 200
+    }]])
+  );
+  const [result] = dedupeHistoryItems(renamedItems, 'page-family');
+
+  assert.equal(getHistoryItemTitleOverrideKey({ url: renameUrl }),
+    'https://feishu.cn/wiki/M1Cew0iYaiH9jfkeD5XcXEuZn3d');
+  assert.equal(getHistoryItemTitleOverrideKey({ url: historyUrl }),
+    'https://feishu.cn/wiki/M1Cew0iYaiH9jfkeD5XcXEuZn3d');
+  assert.equal(result.title, '大模型知识面试一本通');
+  assert.equal(result.isTitleRenamed, true);
+  assert.deepEqual(
+    filterHistoryItemsByQuery([result], '大模型').map((item) => item.id),
+    ['tenant-history-entry']
   );
 });
 
@@ -1359,6 +1391,31 @@ test('query filtering searches effective renamed titles and URLs', () => {
     ).map((item) => item.id),
     ['non-contiguous']
   );
+});
+
+test('Chinese shorthand search matches a bounded phrase in the real renamed Feishu title', () => {
+  const url = 'https://my.feishu.cn/wiki/M1Cew0iYaiH9jfkeD5XcXEuZn3d';
+  const [renamedItem] = applyTitleOverridesToItems(
+    [{
+      id: 'real-feishu-history-item',
+      title: '从0到∞: 大语言模型知识面试一本通 - 飞书云文档',
+      url,
+      lastVisitTime: 1785568922000,
+      visitCount: 6
+    }],
+    new Map([['https://feishu.cn/wiki/M1Cew0iYaiH9jfkeD5XcXEuZn3d', {
+      targetUrl: url,
+      title: '大语言模型知识面试一本通',
+      updatedAt: 1785569265309
+    }]])
+  );
+
+  assert.equal(renamedItem.title, '大语言模型知识面试一本通');
+  assert.deepEqual(
+    filterHistoryItemsByQuery([renamedItem], '大模型').map((item) => item.id),
+    ['real-feishu-history-item']
+  );
+  assert.deepEqual(filterHistoryItemsByQuery([renamedItem], '大面试'), []);
 });
 
 test('plain keywords search titles only and ignore hidden URL parameters', () => {
