@@ -3,34 +3,9 @@ import test from 'node:test';
 
 import {
   appendTimeExemptRenamedItems,
-  createHistorySnapshotLoader,
   DEFAULT_HISTORY_PAGE_SIZE,
-  DEFAULT_HISTORY_SNAPSHOT_CACHE_MS,
-  getTimeExemptRenameLookupTexts,
   searchChromeHistory
 } from '../src/history-data.js';
-
-test('renamed-page lookups group missing pages by hostname and skip pages in the window', () => {
-  const result = getTimeExemptRenameLookupTexts(
-    [historyItem('https://present.example.com/docs/abc12345', 900)],
-    new Map([
-      ['https://present.example.com/docs/abc12345', {
-        targetUrl: 'https://present.example.com/docs/abc12345?tab=details',
-        title: '已存在'
-      }],
-      ['https://missing.example.com/docs/first123', {
-        targetUrl: 'https://missing.example.com/docs/first123?tab=details',
-        title: '缺失一'
-      }],
-      ['https://missing.example.com/docs/second456', {
-        targetUrl: 'https://missing.example.com/docs/second456?tab=details',
-        title: '缺失二'
-      }]
-    ])
-  );
-
-  assert.deepEqual(result, ['missing.example.com']);
-});
 
 test('renamed pages outside the selected time window are restored from real visits', async () => {
   const oldUrl = 'https://example.com/docs/old';
@@ -99,68 +74,6 @@ test('renamed pages deleted from all-time history are not restored', async () =>
   assert.deepEqual(result, []);
 });
 
-test('snapshot loader shares in-flight work, caches ranges, and supports invalidation', async () => {
-  const resolvers = [];
-  let searchCalls = 0;
-  const loader = createHistorySnapshotLoader({
-    now: () => 500,
-    searchHistory(query) {
-      searchCalls += 1;
-      assert.deepEqual(query, { text: '', startTime: 100, endTime: 500 });
-      return new Promise((resolve) => resolvers.push(resolve));
-    }
-  });
-
-  const first = loader.load('week', 100);
-  const second = loader.load('week', 100);
-  assert.equal(first, second);
-  await Promise.resolve();
-  assert.equal(searchCalls, 1);
-
-  resolvers.shift()([historyItem('https://example.com/a', 300)]);
-  await Promise.all([first, second]);
-
-  const third = loader.load('week', 100);
-  assert.equal(DEFAULT_HISTORY_SNAPSHOT_CACHE_MS, 5 * 60 * 1000);
-  assert.equal(searchCalls, 1);
-  assert.equal((await third)[0].url, 'https://example.com/a');
-
-  loader.invalidate('week');
-  const fourth = loader.load('week', 100);
-  await Promise.resolve();
-  assert.equal(searchCalls, 2);
-  resolvers.shift()([]);
-  await fourth;
-});
-
-test('snapshot invalidation prevents an in-flight history request from restoring stale data', async () => {
-  const resolvers = [];
-  let searchCalls = 0;
-  const loader = createHistorySnapshotLoader({
-    now: () => 500,
-    searchHistory() {
-      searchCalls += 1;
-      return new Promise((resolve) => resolvers.push(resolve));
-    }
-  });
-
-  const staleLoad = loader.load('week', 100);
-  await Promise.resolve();
-  loader.invalidate();
-  const freshLoad = loader.load('week', 100);
-  await Promise.resolve();
-  assert.equal(searchCalls, 2);
-  resolvers.shift()([historyItem('https://example.com/stale', 200)]);
-  resolvers.shift()([historyItem('https://example.com/fresh', 300)]);
-
-  assert.deepEqual((await staleLoad).map((item) => item.url), ['https://example.com/fresh']);
-  assert.deepEqual((await freshLoad).map((item) => item.url), ['https://example.com/fresh']);
-  assert.deepEqual(
-    (await loader.load('week', 100)).map((item) => item.url),
-    ['https://example.com/fresh']
-  );
-  assert.equal(searchCalls, 2);
-});
 
 test('history search paginates with an endTime cursor and deduplicates URLs', async () => {
   const queries = [];

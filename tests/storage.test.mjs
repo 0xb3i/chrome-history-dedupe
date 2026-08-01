@@ -2,7 +2,6 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  loadLastSearchSnapshot,
   loadTitleOverrides,
   normalizeCapturedPageMap,
   normalizeCapturedTitleMap,
@@ -10,92 +9,9 @@ import {
   normalizePageTitleOverrideMap,
   normalizePinnedPageKeys,
   saveTitleOverride,
-  saveLastSearchSnapshot,
   togglePinnedUrlKey,
   updateCapturedTitleRecords
 } from '../src/storage.js';
-
-test('processed page snapshot reuses the same range across different queries', async () => {
-  const sessionValues = {};
-  globalThis.chrome = createStorageChrome({}, sessionValues);
-
-  try {
-    const items = [{ title: 'Docs', url: 'https://example.com/docs' }];
-    const snapshot = { pageItems: items };
-    await saveLastSearchSnapshot('  MEEGO   story  ', 'week', snapshot);
-
-    assert.deepEqual(await loadLastSearchSnapshot('MEEGO story', 'week'), snapshot);
-    assert.deepEqual(await loadLastSearchSnapshot('another query', 'week'), snapshot);
-    assert.equal(await loadLastSearchSnapshot('MEEGO story', 'month'), null);
-  } finally {
-    delete globalThis.chrome;
-  }
-});
-
-test('oversized processed snapshots skip session persistence and clear stale cache', async () => {
-  const sessionValues = {
-    'deduped-history-last-search-snapshot': {
-      version: 5,
-      range: 'week',
-      pageItems: [{ title: 'stale' }]
-    }
-  };
-  globalThis.chrome = createStorageChrome({}, sessionValues);
-
-  try {
-    await saveLastSearchSnapshot('', 'all', {
-      pageItems: [{ title: '大'.repeat(3 * 1024 * 1024) }]
-    });
-
-    assert.equal(await loadLastSearchSnapshot('', 'all'), null);
-    assert.equal(sessionValues['deduped-history-last-search-snapshot'], undefined);
-  } finally {
-    delete globalThis.chrome;
-  }
-});
-
-test('last search snapshot rejects results produced by an older matching algorithm', async () => {
-  const sessionValues = {
-    'deduped-history-last-search-snapshot': {
-      version: 3,
-      query: '大模型',
-      range: 'week',
-      pageItemCount: 3,
-      matchedItems: []
-    }
-  };
-  globalThis.chrome = createStorageChrome({}, sessionValues);
-
-  try {
-    assert.equal(await loadLastSearchSnapshot('大模型', 'week'), null);
-  } finally {
-    delete globalThis.chrome;
-  }
-});
-
-test('renaming a page invalidates the processed search snapshot', async () => {
-  const values = {};
-  const sessionValues = {};
-  globalThis.chrome = createStorageChrome(values, sessionValues);
-
-  try {
-    const snapshot = {
-      pageItems: [{ title: '旧标题', url: 'https://example.com/docs/abc12345' }]
-    };
-    await saveLastSearchSnapshot('大模型', 'month', snapshot);
-    assert.deepEqual(await loadLastSearchSnapshot('大模型', 'month'), snapshot);
-
-    await saveTitleOverride(
-      'https://example.com/docs/abc12345',
-      '大模型知识面试一本通',
-      { targetUrl: 'https://example.com/docs/abc12345' }
-    );
-
-    assert.equal(await loadLastSearchSnapshot('大模型', 'month'), null);
-  } finally {
-    delete globalThis.chrome;
-  }
-});
 
 test('last search state normalizes query, range, and renamed filter', () => {
   assert.deepEqual(

@@ -3,15 +3,24 @@ import {
   getHistoryItemTitleOverrideKey
 } from './history-utils.js';
 import {
+  CAPTURED_PAGE_TITLES_STORAGE_KEY,
   deleteTitleOverrides,
-  invalidateLastSearchSnapshot,
   loadTitleOverrides,
   saveCapturedPageTitle,
   saveRenameDraft,
-  saveTitleOverride
+  saveTitleOverride,
+  TITLE_OVERRIDES_STORAGE_KEY
 } from './storage.js';
 import { createNavigationTracker } from './navigation-tracker.js';
 import { getCenteredCoordinate } from './window-placement.js';
+import { createHistoryIndexStore } from './history-index/store.js';
+import { createHistoryIndexService } from './history-index/service.js';
+import {
+  HISTORY_INDEX_ALARM_NAME,
+  HISTORY_INDEX_ENSURE_MESSAGE,
+  HISTORY_INDEX_REBUILD_MESSAGE,
+  HISTORY_INDEX_UPDATED_MESSAGE
+} from './history-index/protocol.js';
 
 const RENAME_CURRENT_PAGE_COMMAND = 'rename-current-page';
 const RENAME_WINDOW_WIDTH = 480;
@@ -22,6 +31,11 @@ const INLINE_RENAME_SAVE_MESSAGE = 'deduped-history:save-inline-rename';
 const INLINE_RENAME_RESTORE_MESSAGE = 'deduped-history:restore-inline-rename';
 let capturedTitleWriteQueue = Promise.resolve();
 const navigationTracker = createNavigationTracker();
+const historyIndexStore = createHistoryIndexStore();
+const historyIndexService = createHistoryIndexService({
+  store: historyIndexStore,
+  notifyUpdated: notifyHistoryIndexUpdated
+});
 
 globalThis.chrome?.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
   const navigationUrls = navigationTracker.update(tabId, changeInfo, tab);
@@ -41,11 +55,31 @@ globalThis.chrome?.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
 globalThis.chrome?.tabs?.onRemoved?.addListener((tabId) => {
   navigationTracker.remove(tabId);
 });
-globalThis.chrome?.history?.onVisited?.addListener(() => {
-  void invalidateLastSearchSnapshot();
+globalThis.chrome?.history?.onVisited?.addListener((item) => {
+  void historyIndexService.handleVisited(item).catch(() => {});
 });
-globalThis.chrome?.history?.onVisitRemoved?.addListener(() => {
-  void invalidateLastSearchSnapshot();
+globalThis.chrome?.history?.onVisitRemoved?.addListener((details) => {
+  void historyIndexService.handleRemoved(details).catch(() => {});
+});
+globalThis.chrome?.storage?.onChanged?.addListener((changes, areaName) => {
+  if (
+    areaName === 'local' &&
+    (changes[TITLE_OVERRIDES_STORAGE_KEY] || changes[CAPTURED_PAGE_TITLES_STORAGE_KEY])
+  ) {
+    void historyIndexService.rebuildDerived().catch(() => {});
+  }
+});
+globalThis.chrome?.runtime?.onStartup?.addListener(() => {
+  void historyIndexService.calibrate().catch(() => {});
+});
+globalThis.chrome?.runtime?.onInstalled?.addListener(() => {
+  scheduleHistoryIndexAlarm();
+  void historyIndexService.calibrate().catch(() => {});
+});
+globalThis.chrome?.alarms?.onAlarm?.addListener((alarm) => {
+  if (alarm?.name === HISTORY_INDEX_ALARM_NAME) {
+    void historyIndexService.calibrate().catch(() => {});
+  }
 });
 
 captureOpenTabTitles();
@@ -57,6 +91,20 @@ globalThis.chrome?.commands?.onCommand?.addListener((command) => {
 });
 
 globalThis.chrome?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+  if (message?.type === HISTORY_INDEX_ENSURE_MESSAGE) {
+    historyIndexService.ensureReady()
+      .then((state) => sendResponse({ ok: true, state }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || '索引初始化失败。' }));
+    return true;
+  }
+
+  if (message?.type === HISTORY_INDEX_REBUILD_MESSAGE) {
+    historyIndexService.rebuildDerived({ immediate: true })
+      .then((state) => sendResponse({ ok: true, state }))
+      .catch((error) => sendResponse({ ok: false, error: error.message || '索引更新失败。' }));
+    return true;
+  }
+
   if (message?.type === INLINE_RENAME_SAVE_MESSAGE) {
     saveInlineRename(message)
       .then(() => sendResponse({ ok: true }))
@@ -73,6 +121,9 @@ globalThis.chrome?.runtime?.onMessage?.addListener((message, _sender, sendRespon
 
   return false;
 });
+
+scheduleHistoryIndexAlarm();
+void historyIndexService.ensureReady().catch(() => {});
 
 async function captureOpenTabTitles() {
   try {
@@ -176,10 +227,42 @@ async function saveInlineRename(message) {
   await saveTitleOverride(message?.titleOverrideKey, message?.title, {
     targetUrl: message?.url
   });
+  await historyIndexService.rebuildDerived({ immediate: true });
 }
 
 async function restoreInlineRename(message) {
   await deleteTitleOverrides([message?.titleOverrideKey]);
+  await historyIndexService.rebuildDerived({ immediate: true });
+}
+
+function scheduleHistoryIndexAlarm() {
+  if (!globalThis.chrome?.alarms?.get || !globalThis.chrome?.alarms?.create) {
+    return;
+  }
+  globalThis.chrome.alarms.get(HISTORY_INDEX_ALARM_NAME, (alarm) => {
+    void globalThis.chrome.runtime?.lastError;
+    if (alarm) return;
+    globalThis.chrome.alarms.create(HISTORY_INDEX_ALARM_NAME, {
+      delayInMinutes: 1,
+      periodInMinutes: 60
+    });
+  });
+}
+
+function notifyHistoryIndexUpdated(update) {
+  return new Promise((resolve) => {
+    if (!globalThis.chrome?.runtime?.sendMessage) {
+      resolve();
+      return;
+    }
+    globalThis.chrome.runtime.sendMessage({
+      type: HISTORY_INDEX_UPDATED_MESSAGE,
+      revision: update?.revision
+    }, () => {
+      void globalThis.chrome.runtime?.lastError;
+      resolve();
+    });
+  });
 }
 
 function toInlineRenameDraft(draft) {

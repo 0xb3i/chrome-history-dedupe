@@ -1,50 +1,38 @@
 import {
   applyPinnedStateToGroups,
   applyPinnedStateToItemsByName,
-  applyCapturedTitlesToItems,
-  applyTitleOverridesToItems,
   compareDisplayNames,
-  dedupeHistoryItems,
   filterHistoryItemsByQuery,
   formatHistoryUrlForGroup,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
-  groupHistoryItems,
-  prepareHistoryItemsForSearch
+  groupHistoryItems
 } from './history-utils.js';
 import {
-  appendTimeExemptRenamedItems,
-  createHistorySnapshotLoader,
-  getTimeExemptRenameLookupTexts
-} from './history-data.js';
-import {
-  CAPTURED_PAGE_TITLES_STORAGE_KEY,
   deleteGroupNameOverride,
   deleteTitleOverrides,
   GROUP_NAME_OVERRIDES_STORAGE_KEY,
-  loadCapturedPageTitles,
   loadGroupNameOverrides,
-  loadLastSearchSnapshot,
   loadLastSearchState,
   loadPinnedUrlKeys,
-  loadTitleOverrides,
-  normalizeCapturedPageMap,
-  normalizePageTitleOverrideMap,
   normalizePinnedPageKeys,
   normalizeTitleOverrideMap,
   PINNED_URLS_STORAGE_KEY,
   saveGroupNameOverride,
-  saveLastSearchSnapshot,
   saveLastSearchState,
   saveTitleOverride,
-  togglePinnedUrlKey,
-  TITLE_OVERRIDES_STORAGE_KEY
+  togglePinnedUrlKey
 } from './storage.js';
+import { createHistoryIndexStore } from './history-index/store.js';
+import {
+  HISTORY_INDEX_ENSURE_MESSAGE,
+  HISTORY_INDEX_REBUILD_MESSAGE,
+  HISTORY_INDEX_UPDATED_MESSAGE
+} from './history-index/protocol.js';
 
-const DEDUPE_MODE = 'page-family';
 const SNAPSHOT_RENDER_DEBOUNCE_MS = 50;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
-const historySnapshotLoader = createHistorySnapshotLoader();
+const historyIndexStore = createHistoryIndexStore();
 
 const form = document.querySelector('#search-form');
 const queryInput = document.querySelector('#query');
@@ -62,23 +50,18 @@ let currentGroups = [];
 let currentFlatItems = [];
 let pinnedUrlKeys = new Set();
 let groupNameOverrides = new Map();
-let titleOverrides = new Map();
-let capturedPageTitles = new Map();
 let isInitialized = false;
 let renameDialogItem = null;
 let groupRenameDialogGroup = null;
 let showRenamedOnly = false;
 let showMinimalMode = false;
 let latestSearchRequestId = 0;
-let historySnapshot = [];
-let hasHistorySnapshot = false;
 let pageItemsSnapshot = [];
 let pageItemsRange = '';
 let hasPageItemsSnapshot = false;
 let searchSnapshot = null;
-let historySnapshotLoadedAt = 0;
+let loadedIndexRevision = 0;
 let snapshotRenderTimer = null;
-let pageItemsRebuildTimer = null;
 
 const currentYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   month: 'long',
@@ -117,83 +100,53 @@ function renderRuntimeVersion() {
 
 async function init() {
   try {
-    const [loadedPinnedUrlKeys, loadedGroupNameOverrides, loadedTitleOverrides, loadedCapturedPageTitles, lastSearchState] =
+    const [loadedPinnedUrlKeys, loadedGroupNameOverrides, lastSearchState] =
       await Promise.all([
         loadPinnedUrlKeys(),
         loadGroupNameOverrides(),
-        loadTitleOverrides(),
-        loadCapturedPageTitles(),
         loadLastSearchState()
       ]);
     pinnedUrlKeys = loadedPinnedUrlKeys;
     groupNameOverrides = loadedGroupNameOverrides;
-    titleOverrides = loadedTitleOverrides;
-    capturedPageTitles = loadedCapturedPageTitles;
     applyLastSearchState(lastSearchState);
     selectQueryInputOnPopupOpen();
     isInitialized = true;
     addStorageChangeListener();
-    addHistoryChangeListeners();
-    const cachedSnapshot = await loadCachedSearchSnapshot();
+    addHistoryIndexUpdateListener();
+    const cachedIndex = await historyIndexStore.loadRange(rangeSelect.value);
 
-    if (cachedSnapshot) {
-      pageItemsSnapshot = cachedSnapshot.pageItems;
-      pageItemsRange = rangeSelect.value;
-      hasPageItemsSnapshot = true;
-      searchSnapshot = createSearchSnapshotFromPageItems(
-        pageItemsSnapshot,
-        queryInput.value
-      );
-      historySnapshotLoadedAt = Date.now();
-      renderHistorySnapshot();
-    } else {
-      await runSearch();
-    }
+    if (cachedIndex) applyLoadedRangeIndex(cachedIndex, rangeSelect.value);
+    else await loadRangeIndexWithBackgroundEnsure(rangeSelect.value);
+
+    void requestHistoryIndex(HISTORY_INDEX_ENSURE_MESSAGE).catch(() => {});
   } catch (error) {
     renderError(error);
   }
 }
 
-async function runSearch(options = {}) {
+async function runSearch() {
   const searchRequestId = ++latestSearchRequestId;
   const requestedQuery = queryInput.value;
   const requestedRange = rangeSelect.value;
 
   try {
     void rememberCurrentSearchState();
-    if (!options.forceRefresh && hasPageItemsSnapshot && pageItemsRange === requestedRange) {
+    if (hasPageItemsSnapshot && pageItemsRange === requestedRange) {
       setLoading();
       searchSnapshot = createSearchSnapshotFromPageItems(pageItemsSnapshot, requestedQuery);
       renderHistorySnapshot();
-      void saveLastSearchSnapshot(requestedQuery, requestedRange, {
-        pageItems: pageItemsSnapshot
-      }).catch(() => {});
       return;
     }
 
     setLoading();
-    if (options.forceRefresh) {
-      historySnapshotLoader.invalidate();
-    }
-    const loadedHistorySnapshot = await loadHistorySnapshot(requestedRange);
+    const loadedIndex = await historyIndexStore.loadRange(requestedRange) ??
+      await loadRangeIndexWithBackgroundEnsure(requestedRange, { apply: false });
 
     if (!isLatestSearchRequest(searchRequestId)) {
       return;
     }
 
-    historySnapshot = loadedHistorySnapshot;
-    hasHistorySnapshot = true;
-    pageItemsSnapshot = createPageItems(loadedHistorySnapshot);
-    pageItemsRange = requestedRange;
-    hasPageItemsSnapshot = true;
-    searchSnapshot = createSearchSnapshotFromPageItems(pageItemsSnapshot, requestedQuery);
-    historySnapshotLoadedAt = Date.now();
-    renderHistorySnapshot();
-    void saveLastSearchSnapshot(requestedQuery, requestedRange, {
-      pageItems: pageItemsSnapshot
-    }).catch(() => {
-      // A session cache speeds up reopening and later queries, but search remains usable without it.
-    });
+    applyLoadedRangeIndex(loadedIndex, requestedRange, requestedQuery);
   } catch (error) {
     if (isLatestSearchRequest(searchRequestId)) {
       renderError(error);
@@ -201,28 +154,22 @@ async function runSearch(options = {}) {
   }
 }
 
-async function loadCachedSearchSnapshot() {
-  try {
-    return await loadLastSearchSnapshot(queryInput.value, rangeSelect.value);
-  } catch {
-    return null;
-  }
+async function loadRangeIndexWithBackgroundEnsure(range, options = {}) {
+  const response = await requestHistoryIndex(HISTORY_INDEX_ENSURE_MESSAGE);
+  if (!response?.ok) throw new Error(response?.error || '历史索引尚未就绪。');
+  const loadedIndex = await historyIndexStore.loadRange(range);
+  if (!loadedIndex) throw new Error('历史索引尚未就绪，请稍后重试。');
+  if (options.apply !== false) applyLoadedRangeIndex(loadedIndex, range);
+  return loadedIndex;
 }
 
-async function loadHistorySnapshot(range) {
-  const startTime = getStartTime(range);
-  const windowItems = await historySnapshotLoader.load(range, startTime);
-  const lookupTexts = range === 'all'
-    ? []
-    : getTimeExemptRenameLookupTexts(windowItems, titleOverrides);
-  const allHistoryItems = range === 'all'
-    ? windowItems
-    : (await Promise.all(lookupTexts.map((text) => (
-        historySnapshotLoader.load(`renamed:${text}`, 0, text)
-      )))).flat();
-  return appendTimeExemptRenamedItems(windowItems, titleOverrides, {
-    allHistoryItems
-  });
+function applyLoadedRangeIndex(index, range, query = queryInput.value) {
+  pageItemsSnapshot = index.pageItems;
+  pageItemsRange = range;
+  hasPageItemsSnapshot = true;
+  loadedIndexRevision = Number(index.revision ?? loadedIndexRevision);
+  searchSnapshot = createSearchSnapshotFromPageItems(pageItemsSnapshot, query);
+  renderHistorySnapshot();
 }
 
 function renderHistorySnapshot() {
@@ -232,7 +179,7 @@ function renderHistorySnapshot() {
   }
 
   const query = queryInput.value.trim();
-  const snapshot = searchSnapshot ?? createSearchSnapshot(historySnapshot, query);
+  const snapshot = searchSnapshot ?? createSearchSnapshotFromPageItems(pageItemsSnapshot, query);
   const matchedItems = snapshot.matchedItems;
   const visibleItems = showRenamedOnly
     ? matchedItems.filter((item) => item.isTitleRenamed)
@@ -254,11 +201,6 @@ function renderHistorySnapshot() {
   setStatus(showRenamedOnly ? `${visibleItems.length} 条已重命名` : `${visibleItems.length} 条`);
 }
 
-function createSearchSnapshot(items, query) {
-  const pageItems = createPageItems(items);
-  return createSearchSnapshotFromPageItems(pageItems, query);
-}
-
 function createSearchSnapshotFromPageItems(pageItems, query) {
   return {
     pageItemCount: pageItems.length,
@@ -266,15 +208,8 @@ function createSearchSnapshotFromPageItems(pageItems, query) {
   };
 }
 
-function createPageItems(items) {
-  const capturedTitleItems = applyCapturedTitlesToItems(items, capturedPageTitles);
-  const renamedItems = applyTitleOverridesToItems(capturedTitleItems, titleOverrides);
-  const urlItems = dedupeHistoryItems(renamedItems, 'normalized-url');
-  return prepareHistoryItemsForSearch(dedupeHistoryItems(urlItems, DEDUPE_MODE));
-}
-
 function scheduleSnapshotRender() {
-  if (!historySnapshotLoadedAt) {
+  if (!hasPageItemsSnapshot) {
     return;
   }
 
@@ -997,9 +932,8 @@ async function saveRenameDialogTitle() {
     await saveTitleOverride(getRenameDialogTitleOverrideKey(), normalizedTitle, {
       targetUrl: renameDialogItem.url
     });
-    titleOverrides = await loadTitleOverrides();
+    await refreshDerivedHistoryIndex();
     closeRenameDialog();
-    scheduleSnapshotRender();
   } catch (error) {
     renameDialog.status.textContent = error.message || '保存失败。';
   }
@@ -1015,9 +949,8 @@ async function restoreRenameDialogOriginalTitle() {
 
   try {
     await deleteTitleOverrides(getRenameDialogTitleOverrideKeys());
-    titleOverrides = await loadTitleOverrides();
+    await refreshDerivedHistoryIndex();
     closeRenameDialog();
-    scheduleSnapshotRender();
   } catch (error) {
     renameDialog.status.textContent = error.message || '还原失败。';
   }
@@ -1210,18 +1143,6 @@ function addStorageChangeListener() {
       }
     }
 
-    if (changes[TITLE_OVERRIDES_STORAGE_KEY]) {
-      titleOverrides = normalizePageTitleOverrideMap(changes[TITLE_OVERRIDES_STORAGE_KEY].newValue);
-      schedulePageItemsRebuild();
-    }
-
-    if (changes[CAPTURED_PAGE_TITLES_STORAGE_KEY]) {
-      capturedPageTitles = normalizeCapturedPageMap(
-        changes[CAPTURED_PAGE_TITLES_STORAGE_KEY].newValue
-      );
-      schedulePageItemsRebuild();
-    }
-
     if (changes[GROUP_NAME_OVERRIDES_STORAGE_KEY]) {
       groupNameOverrides = normalizeTitleOverrideMap(
         changes[GROUP_NAME_OVERRIDES_STORAGE_KEY].newValue
@@ -1231,55 +1152,48 @@ function addStorageChangeListener() {
   });
 }
 
-function addHistoryChangeListeners() {
-  const invalidateSnapshots = () => {
-    historySnapshotLoader.invalidate();
-    historySnapshotLoadedAt = 0;
-    historySnapshot = [];
-    hasHistorySnapshot = false;
-    pageItemsSnapshot = [];
-    pageItemsRange = '';
-    hasPageItemsSnapshot = false;
-    searchSnapshot = null;
-  };
-
-  globalThis.chrome?.history?.onVisited?.addListener(invalidateSnapshots);
-  globalThis.chrome?.history?.onVisitRemoved?.addListener(invalidateSnapshots);
-}
-
-function rebuildPageItemsFromLoadedHistory() {
-  if (!hasHistorySnapshot) {
-    pageItemsSnapshot = [];
-    pageItemsRange = '';
-    hasPageItemsSnapshot = false;
-    searchSnapshot = null;
-    return;
-  }
-
-  pageItemsSnapshot = createPageItems(historySnapshot);
-  pageItemsRange = rangeSelect.value;
-  hasPageItemsSnapshot = true;
-  searchSnapshot = createSearchSnapshotFromPageItems(pageItemsSnapshot, queryInput.value);
-  void saveLastSearchSnapshot(queryInput.value, pageItemsRange, {
-    pageItems: pageItemsSnapshot
-  }).catch(() => {});
-}
-
-function schedulePageItemsRebuild() {
-  if (pageItemsRebuildTimer !== null) {
-    clearTimeout(pageItemsRebuildTimer);
-  }
-
-  pageItemsRebuildTimer = setTimeout(() => {
-    pageItemsRebuildTimer = null;
-    if (hasHistorySnapshot) {
-      rebuildPageItemsFromLoadedHistory();
-      renderHistorySnapshot();
-      return;
+function addHistoryIndexUpdateListener() {
+  globalThis.chrome?.runtime?.onMessage?.addListener((message) => {
+    if (
+      message?.type !== HISTORY_INDEX_UPDATED_MESSAGE ||
+      Number(message?.revision ?? 0) <= loadedIndexRevision
+    ) {
+      return false;
     }
 
-    void runSearch({ forceRefresh: true });
-  }, SNAPSHOT_RENDER_DEBOUNCE_MS);
+    void reloadCurrentRangeIndex();
+    return false;
+  });
+}
+
+async function refreshDerivedHistoryIndex() {
+  const response = await requestHistoryIndex(HISTORY_INDEX_REBUILD_MESSAGE);
+  if (!response?.ok) throw new Error(response?.error || '索引更新失败。');
+  await reloadCurrentRangeIndex();
+}
+
+async function reloadCurrentRangeIndex() {
+  const range = rangeSelect.value;
+  const loadedIndex = await historyIndexStore.loadRange(range);
+  if (!loadedIndex || Number(loadedIndex.revision ?? 0) <= loadedIndexRevision) return;
+  applyLoadedRangeIndex(loadedIndex, range);
+}
+
+function requestHistoryIndex(type) {
+  return new Promise((resolve, reject) => {
+    if (!globalThis.chrome?.runtime?.sendMessage) {
+      reject(new Error('扩展后台不可用。'));
+      return;
+    }
+    globalThis.chrome.runtime.sendMessage({ type }, (response) => {
+      const lastError = globalThis.chrome.runtime?.lastError;
+      if (lastError) {
+        reject(new Error(lastError.message));
+        return;
+      }
+      resolve(response);
+    });
+  });
 }
 
 function formatGroupMeta(group) {
@@ -1290,17 +1204,6 @@ function formatGroupMeta(group) {
   }
 
   return `${baseMeta} · 置顶 ${group.pinnedCount}`;
-}
-
-function getStartTime(range) {
-  const now = Date.now();
-  const day = 24 * 60 * 60 * 1000;
-
-  if (range === 'day') return now - day;
-  if (range === 'week') return now - 7 * day;
-  if (range === 'month') return now - 30 * day;
-  if (range === 'quarter') return now - 90 * day;
-  return 0;
 }
 
 function formatVisitTime(value) {

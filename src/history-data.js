@@ -1,93 +1,6 @@
 import { getPageIdentityKey } from './page-identity.js';
 
 export const DEFAULT_HISTORY_PAGE_SIZE = 10000;
-export const DEFAULT_HISTORY_SNAPSHOT_CACHE_MS = 5 * 60 * 1000;
-
-export function createHistorySnapshotLoader(options = {}) {
-  const searchHistory = options.searchHistory ?? searchChromeHistory;
-  const now = options.now ?? Date.now;
-  const apiOptions = options.apiOptions ?? options;
-  const cacheTtlMs = normalizeNonNegativeNumber(
-    options.cacheTtlMs,
-    DEFAULT_HISTORY_SNAPSHOT_CACHE_MS
-  );
-  const tasks = new Map();
-  const snapshots = new Map();
-  let generation = 0;
-
-  const load = (rangeKey, startTime, text = '') => {
-      const cachedSnapshot = snapshots.get(rangeKey);
-      const currentTime = now();
-
-      if (cachedSnapshot && currentTime - cachedSnapshot.loadedAt <= cacheTtlMs) {
-        return Promise.resolve(cachedSnapshot.items);
-      }
-
-      const currentTask = tasks.get(rangeKey);
-      if (currentTask) {
-        return currentTask;
-      }
-
-      const endTime = currentTime;
-      const taskGeneration = generation;
-      const task = Promise.resolve()
-        .then(() => searchHistory({ text, startTime, endTime }, apiOptions))
-        .then((items) => {
-          if (taskGeneration !== generation) {
-            return load(rangeKey, startTime, text);
-          }
-          snapshots.set(rangeKey, { items, loadedAt: now() });
-          return items;
-        });
-      tasks.set(rangeKey, task);
-
-      const clearTask = () => {
-        if (tasks.get(rangeKey) === task) {
-          tasks.delete(rangeKey);
-        }
-      };
-      void task.then(clearTask, clearTask);
-      return task;
-  };
-
-  return {
-    load,
-    invalidate(rangeKey) {
-      generation += 1;
-      tasks.clear();
-      if (rangeKey === undefined) {
-        snapshots.clear();
-        return;
-      }
-
-      snapshots.delete(rangeKey);
-    }
-  };
-}
-
-export function getTimeExemptRenameLookupTexts(items, titleOverrides) {
-  const windowItems = Array.isArray(items) ? items : [];
-  const overrides = titleOverrides instanceof Map
-    ? titleOverrides
-    : new Map(Object.entries(titleOverrides ?? {}));
-  const existingPageKeys = new Set(
-    windowItems.map((item) => getPageIdentityKey(item?.url)).filter(Boolean)
-  );
-  const lookupTexts = new Set();
-
-  for (const [storedKey, record] of overrides) {
-    const targetUrl = String(record?.targetUrl ?? '').trim();
-    const pageKey = getPageIdentityKey(targetUrl) || String(storedKey ?? '').trim();
-
-    if (!targetUrl || !pageKey || existingPageKeys.has(pageKey)) {
-      continue;
-    }
-
-    lookupTexts.add(getHistoryLookupText(targetUrl));
-  }
-
-  return [...lookupTexts].filter(Boolean).sort();
-}
 
 /**
  * Read every matching Chrome history item by moving an end-time cursor backwards.
@@ -251,15 +164,6 @@ function getOldestVisitTime(items) {
   return oldestTime;
 }
 
-function getHistoryLookupText(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    return /^https?:$/.test(url.protocol) ? url.hostname : rawUrl;
-  } catch {
-    return rawUrl;
-  }
-}
-
 function normalizePositiveInteger(value, fallback) {
   const numericValue = Number(value);
 
@@ -270,14 +174,6 @@ function normalizePositiveInteger(value, fallback) {
   return Math.max(1, Math.floor(numericValue));
 }
 
-function normalizeNonNegativeNumber(value, fallback) {
-  if (value === undefined) {
-    return fallback;
-  }
-
-  const numericValue = Number(value);
-  return Number.isFinite(numericValue) && numericValue >= 0 ? numericValue : fallback;
-}
 
 function toFiniteNumber(value) {
   if (value === undefined || value === null || value === '') {

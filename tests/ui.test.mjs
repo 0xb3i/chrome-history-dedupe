@@ -7,6 +7,9 @@ const popupHtml = readText('../popup.html');
 const renameHtml = readText('../rename.html');
 const historyPageJs = readText('../src/history-page.js');
 const historyDataJs = readText('../src/history-data.js');
+const historyIndexDeriveJs = readText('../src/history-index/derive.js');
+const historyIndexServiceJs = readText('../src/history-index/service.js');
+const historyIndexStoreJs = readText('../src/history-index/store.js');
 const backgroundJs = readText('../src/background.js');
 const renamePageJs = readText('../src/rename-page.js');
 const renameOverlayJs = readText('../src/rename-overlay.js');
@@ -29,25 +32,21 @@ test('history surfaces show the loaded extension version', () => {
   assert.equal(historyPageJs.includes('appVersion.textContent = `v${version}`;'), true);
 });
 
-test('history page script dedupes by stable page family before filtering', () => {
+test('background index dedupes by stable page family before the page filters', () => {
   assert.equal(historyPageJs.includes("querySelector('#mode')"), false);
   assert.equal(historyPageJs.includes('modeSelect'), false);
-  assert.equal(historyPageJs.includes("const DEDUPE_MODE = 'page-family';"), true);
-  assert.equal(historyPageJs.includes("dedupeHistoryItems(renamedItems, 'normalized-url')"), true);
-  assert.equal(historyPageJs.includes('dedupeHistoryItems(urlItems, DEDUPE_MODE)'), true);
-  assert.equal(historyPageJs.indexOf('const pageItems = createPageItems(items)') <
-    historyPageJs.indexOf('filterHistoryItemsByQuery(pageItems, String(query'), true);
+  assert.equal(historyIndexDeriveJs.includes("dedupeHistoryItems(renamedItems, 'normalized-url')"), true);
+  assert.equal(historyIndexDeriveJs.includes("dedupeHistoryItems(urlItems, 'page-family')"), true);
+  assert.equal(historyPageJs.includes('historyIndexStore.loadRange'), true);
+  assert.equal(historyPageJs.includes('filterHistoryItemsByQuery(pageItems, String(query'), true);
 });
 
-test('history page filters queries locally after applying renamed titles', () => {
-  assert.equal(historyDataJs.includes('searchHistory({ text, startTime, endTime }, apiOptions)'), true);
-  assert.equal(historyPageJs.includes('loadCapturedPageTitles'), true);
-  assert.equal(historyPageJs.includes('applyCapturedTitlesToItems'), true);
-  assert.equal(
-    historyPageJs.includes('applyCapturedTitlesToItems(items, capturedPageTitles)'),
-    true
-  );
+test('history page filters committed indexes locally without accessing Chrome history', () => {
+  assert.equal(historyIndexDeriveJs.includes('applyCapturedTitlesToItems'), true);
+  assert.equal(historyIndexDeriveJs.includes('applyTitleOverridesToItems'), true);
   assert.equal(historyPageJs.includes('filterHistoryItemsByQuery(pageItems, String(query'), true);
+  assert.equal(historyPageJs.includes('chrome?.history'), false);
+  assert.equal(historyPageJs.includes("from './history-data.js'"), false);
   assert.equal(historyPageJs.includes('scheduleSnapshotRender'), true);
 });
 
@@ -75,44 +74,34 @@ test('background captures final tab titles for current and future tabs', () => {
   assert.equal(backgroundJs.includes('navigationUrls'), true);
 });
 
-test('background invalidates processed search snapshots when history changes', () => {
+test('background incrementally updates the persistent index when history changes', () => {
   assert.equal(backgroundJs.includes('history?.onVisited?.addListener'), true);
   assert.equal(backgroundJs.includes('history?.onVisitRemoved?.addListener'), true);
-  assert.equal(backgroundJs.includes('invalidateLastSearchSnapshot'), true);
+  assert.equal(backgroundJs.includes('historyIndexService.handleVisited(item)'), true);
+  assert.equal(backgroundJs.includes('historyIndexService.handleRemoved(details)'), true);
+  assert.equal(historyIndexServiceJs.includes('store.applyRawMutation'), true);
 });
 
-test('history page uses cached history search totals without per-URL visit requests', () => {
-  assert.equal(historyDataJs.includes('const endTime = currentTime;'), true);
-  assert.equal(historyDataJs.includes('searchHistory({ text, startTime, endTime }, apiOptions)'), true);
-  assert.equal(historyPageJs.includes('createHistorySnapshotLoader'), true);
-  assert.equal(historyPageJs.includes('historySnapshotLoader.load(range, startTime)'), true);
+test('history page reads atomic IndexedDB generations and never performs API refreshes', () => {
   assert.equal(historyDataJs.includes('getVisits'), false);
-  assert.equal(historyPageJs.includes('applyVisitCountsForWindow'), false);
-  assert.equal(historyPageJs.includes('const visitCount = item.totalVisitCount ?? item.visitCount ?? 0;'), true);
-  assert.equal(historyDataJs.includes('DEFAULT_HISTORY_SNAPSHOT_CACHE_MS'), true);
-  assert.equal(historyPageJs.includes('loadCachedSearchSnapshot()'), true);
-  assert.equal(historyPageJs.includes('saveLastSearchSnapshot(requestedQuery, requestedRange'), true);
-  assert.equal(historyPageJs.includes('pageItemsSnapshot = cachedSnapshot.pageItems;'), true);
-  assert.equal(historyPageJs.includes('pageItemsSnapshot = createPageItems(loadedHistorySnapshot);'), true);
+  assert.equal(historyPageJs.includes('historyIndexStore.loadRange'), true);
+  assert.equal(historyPageJs.includes('HISTORY_INDEX_ENSURE_MESSAGE'), true);
+  assert.equal(historyPageJs.includes('saveLastSearchSnapshot'), false);
+  assert.equal(historyPageJs.includes('searchChromeHistory'), false);
   assert.equal(historyPageJs.includes('async function init() {\n  setLoading();'), false);
   assert.equal(historyPageJs.includes("form.addEventListener('submit'"), true);
-  assert.equal(historyPageJs.includes('if (!options.forceRefresh && hasPageItemsSnapshot'), true);
+  assert.equal(historyPageJs.includes('hasPageItemsSnapshot && pageItemsRange === requestedRange'), true);
   assert.equal(historyPageJs.includes('createSearchSnapshotFromPageItems(pageItemsSnapshot'), true);
-  assert.equal(historyPageJs.includes('prepareHistoryItemsForSearch'), true);
-  assert.equal(historyPageJs.includes('historySnapshotLoader.invalidate();'), true);
+  assert.equal(historyIndexStoreJs.includes('activeGeneration'), true);
+  assert.equal(historyIndexStoreJs.includes('committedRevision'), true);
 });
 
 test('renamed pages remain visible outside the selected time window', () => {
-  assert.equal(historyPageJs.includes('getTimeExemptRenameLookupTexts(windowItems, titleOverrides)'), true);
-  assert.equal(historyPageJs.includes('historySnapshotLoader.load(`renamed:${text}`, 0, text)'), true);
-  assert.equal(historyPageJs.includes("historySnapshotLoader.load('all', 0)"), false);
-  assert.equal(historyPageJs.includes('appendTimeExemptRenamedItems(windowItems, titleOverrides, {'), true);
-  assert.equal(historyPageJs.includes('allHistoryItems'), true);
+  assert.equal(historyIndexDeriveJs.includes('appendTimeExemptRenamedItems(windowItems, titleOverrides, {'), true);
+  assert.equal(historyIndexDeriveJs.includes('allHistoryItems: items'), true);
   assert.equal(historyDataJs.includes('existingPageKeys.has(pageKey)'), true);
   assert.equal(historyDataJs.includes('renamedPageKeys.has(pageKey)'), true);
-  assert.equal(historyPageJs.includes('schedulePageItemsRebuild();'), true);
-  assert.equal(historyPageJs.includes('let pageItemsRebuildTimer = null;'), true);
-  assert.equal(historyPageJs.includes('pageItemsRebuildTimer = setTimeout'), true);
+  assert.equal(backgroundJs.includes('historyIndexService.rebuildDerived'), true);
 });
 
 test('history surfaces do not expose a max results control', () => {
@@ -330,7 +319,7 @@ test('history results expose an icon-only rename control', () => {
   assert.equal(historyPageJs.includes('deleteTitleOverrides'), true);
   assert.equal(historyPageJs.includes('还原原名'), true);
   assert.equal(
-    historyPageJs.includes('applyTitleOverridesToItems(capturedTitleItems, titleOverrides)'),
+    historyIndexDeriveJs.includes('applyTitleOverridesToItems(capturedTitleItems, titleOverrides)'),
     true
   );
   assert.equal(historyPageJs.includes('createRenameDialog'), true);
@@ -386,7 +375,7 @@ test('minimal summary metric only changes presentation and never bypasses safe d
   assert.equal(historyPageJs.includes('showMinimalMode = !showMinimalMode;'), true);
   assert.equal(historyPageJs.includes('dedupeHistoryItems(titleDedupedItems, MINIMAL_DEDUPE_MODE)'), false);
   assert.equal(
-    historyPageJs.includes('prepareHistoryItemsForSearch(dedupeHistoryItems(urlItems, DEDUPE_MODE))'),
+    historyIndexDeriveJs.includes("prepareHistoryItemsForSearch(dedupeHistoryItems(urlItems, 'page-family'))"),
     true
   );
   assert.equal(historyPageJs.includes("document.body.classList.toggle('minimal-mode', showMinimalMode)"), true);
