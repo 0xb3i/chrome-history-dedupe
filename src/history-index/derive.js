@@ -12,7 +12,7 @@ import {
   appendTimeExemptRenamedItemsCooperatively
 } from '../history-data.js';
 
-export const HISTORY_INDEX_ALGORITHM_VERSION = 2;
+export const HISTORY_INDEX_ALGORITHM_VERSION = 4;
 export const HISTORY_INDEX_RANGES = ['day', 'week', 'month', 'quarter', 'all'];
 
 const DAY_MS = 24 * 60 * 60 * 1000;

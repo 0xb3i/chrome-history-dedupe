@@ -123,8 +123,7 @@ function finalizeDedupeBuckets(buckets) {
       totalVisitCount: accumulator.totalVisitCount
     }
   )).sort((left, right) => {
-    const byTime = getVisitTime(right) - getVisitTime(left);
-    return byTime || left.dedupeKey.localeCompare(right.dedupeKey);
+    return compareHistoryItemsByCandidateRank(left, right);
   });
 }
 
@@ -132,10 +131,7 @@ export function groupHistoryItems(items, mode = 'domain') {
   return collectHistoryGroups(items, mode)
     .map((group) => ({
       ...group,
-      items: [...group.items].sort((left, right) => {
-        const byTime = getVisitTime(right) - getVisitTime(left);
-        return byTime || String(left.url ?? '').localeCompare(String(right.url ?? ''));
-      })
+      items: [...group.items].sort(compareHistoryItemsWithinGroup)
     }))
     .sort((left, right) => {
       const byCount = right.totalVisitCount - left.totalVisitCount;
@@ -149,7 +145,10 @@ export function groupHistoryItems(items, mode = 'domain') {
 }
 
 export function groupHistoryItemsByCandidateRank(items, mode = 'domain') {
-  return collectHistoryGroups(items, mode);
+  return collectHistoryGroups(items, mode).map((group) => ({
+    ...group,
+    items: [...group.items].sort(compareHistoryItemsWithinGroup)
+  }));
 }
 
 function collectHistoryGroups(items, mode) {
@@ -178,20 +177,6 @@ function collectHistoryGroups(items, mode) {
   }
 
   return [...buckets.values()];
-}
-
-export function prioritizeRenamedHistoryItems(items) {
-  return items
-    .map((item, originalIndex) => ({
-      item,
-      originalIndex,
-      hasRenamePriority: Boolean(item?.isTitleRenamed)
-    }))
-    .sort((left, right) => {
-      const byRename = Number(right.hasRenamePriority) - Number(left.hasRenamePriority);
-      return byRename || left.originalIndex - right.originalIndex;
-    })
-    .map(({ item }) => item);
 }
 
 export function formatHistoryUrlForGroup(item, groupKey) {
@@ -445,31 +430,24 @@ export function filterHistoryItemsByQuery(items, query) {
     return items;
   }
 
-  const searchesUrl = isUrlSearchQuery(query);
-
   return items.filter((item) => {
-    const normalizedValues = getPreparedSearchValues(item, searchesUrl);
+    const normalizedValues = getPreparedSearchTitles(item);
     const searchableText = normalizedValues.join(' ');
     return queryKeywords.every((keyword) => (
       searchableText.includes(keyword) ||
-      (!searchesUrl && normalizedValues.some((value) => matchesBoundedHanSubsequence(
+      normalizedValues.some((value) => matchesBoundedHanSubsequence(
         value,
         keyword
-      )))
+      ))
     ));
   });
 }
 
 export function prepareHistoryItemsForSearch(items) {
-  return items.map((item) => {
-    const searchableUrls = getItemSearchableUrls(item);
-    return {
-      ...item,
-      normalizedSearchTitles: getItemSearchableTitles(item).map(normalizeSearchText),
-      normalizedPlainUrls: searchableUrls.map(getPlainUrlSearchText).map(normalizeSearchText),
-      normalizedSearchUrls: searchableUrls.map(normalizeSearchText)
-    };
-  });
+  return items.map((item) => ({
+    ...item,
+    normalizedSearchTitles: getItemSearchableTitles(item).map(normalizeSearchText)
+  }));
 }
 
 export async function prepareHistoryItemsForSearchCooperatively(items, options = {}) {
@@ -485,24 +463,10 @@ export async function prepareHistoryItemsForSearchCooperatively(items, options =
   return preparedItems;
 }
 
-function getPreparedSearchValues(item, searchesUrl) {
-  if (searchesUrl && Array.isArray(item?.normalizedSearchUrls)) {
-    return item.normalizedSearchUrls;
-  }
-
-  if (
-    !searchesUrl &&
-    Array.isArray(item?.normalizedSearchTitles) &&
-    Array.isArray(item?.normalizedPlainUrls)
-  ) {
-    return [...item.normalizedSearchTitles, ...item.normalizedPlainUrls];
-  }
-
-  const searchableUrls = getItemSearchableUrls(item);
-  const searchableValues = searchesUrl
-    ? searchableUrls
-    : [...getItemSearchableTitles(item), ...searchableUrls.map(getPlainUrlSearchText)];
-  return searchableValues.map(normalizeSearchText);
+function getPreparedSearchTitles(item) {
+  return Array.isArray(item?.normalizedSearchTitles)
+    ? item.normalizedSearchTitles
+    : getItemSearchableTitles(item).map(normalizeSearchText);
 }
 
 function matchesBoundedHanSubsequence(value, keyword) {
@@ -535,18 +499,10 @@ function matchesBoundedHanSubsequence(value, keyword) {
   return false;
 }
 
-function isUrlSearchQuery(query) {
-  const normalizedQuery = String(query ?? '').trim();
-  return /:\/\//.test(normalizedQuery) ||
-    /^www\./i.test(normalizedQuery) ||
-    /^[^\s/]+\.[a-z]{2,}(?:[/:?#]|$)/i.test(normalizedQuery) ||
-    normalizedQuery.startsWith('/');
-}
-
 export function applyPinnedStateToGroups(groups, pinnedKeys = new Set()) {
   const pinOrders = createPinOrders(pinnedKeys);
 
-  return groups.map((group) => {
+  return groups.map((group, originalGroupIndex) => {
     const itemsWithPinState = group.items.map((item, index) => {
       const pinKeys = getItemPinKeys(item);
       const activePinKeys = pinKeys.filter((key) => pinOrders.has(key));
@@ -569,8 +525,7 @@ export function applyPinnedStateToGroups(groups, pinnedKeys = new Set()) {
       .sort((left, right) => {
         const byPin = Number(right.isPinned) - Number(left.isPinned);
         const byPinOrder = (left.pinOrder ?? Infinity) - (right.pinOrder ?? Infinity);
-        const byRename = Number(right.isTitleRenamed) - Number(left.isTitleRenamed);
-        return byPin || byPinOrder || byRename || left.originalIndex - right.originalIndex;
+        return byPin || byPinOrder || left.originalIndex - right.originalIndex;
       })
       .map((item) => {
         const { originalIndex, pinOrder, ...publicItem } = item;
@@ -580,9 +535,19 @@ export function applyPinnedStateToGroups(groups, pinnedKeys = new Set()) {
     return {
       ...group,
       items,
-      pinnedCount: items.filter((item) => item.isPinned).length
+      pinnedCount: items.filter((item) => item.isPinned).length,
+      groupRankItem: [...itemsWithPinState].sort(compareHistoryItemsBetweenGroups)[0],
+      originalGroupIndex
     };
-  });
+  })
+    .sort((left, right) => (
+      compareHistoryItemsBetweenGroups(left.groupRankItem, right.groupRankItem) ||
+      left.originalGroupIndex - right.originalGroupIndex
+    ))
+    .map((group) => {
+      const { groupRankItem, originalGroupIndex, ...publicGroup } = group;
+      return publicGroup;
+    });
 }
 
 export function applyPinnedStateToItemsByName(items, pinnedKeys = new Set()) {
@@ -690,7 +655,13 @@ function getItemPinKeys(item) {
 
 function getItemSearchableTitles(item) {
   const titles = Array.isArray(item?.searchableTitles) ? item.searchableTitles : [];
-  return mergeStringValues(titles, [item?.title, item?.historyTitle]);
+  return mergeStringValues(titles, [item?.title, item?.historyTitle])
+    .filter((title) => !isUrlLikeSearchTitle(title));
+}
+
+function isUrlLikeSearchTitle(value) {
+  const title = String(value ?? '').trim();
+  return /^(?:https?|file):\/\//i.test(title) || /^www\./i.test(title);
 }
 
 function getItemSearchableUrls(item) {
@@ -799,15 +770,6 @@ function pickTitleOverrideTargetIndex(items, indexes, targetUrl) {
   }, -1);
 }
 
-function getPlainUrlSearchText(rawUrl) {
-  try {
-    const url = new URL(rawUrl);
-    return `${url.hostname} ${safeDecodeUrlPath(url.pathname)}`;
-  } catch {
-    return rawUrl;
-  }
-}
-
 function getDedupeCount(item) {
   const count = Number(item?.dedupeCount ?? 1);
   return Number.isFinite(count) && count > 0 ? count : 1;
@@ -843,6 +805,38 @@ function getTotalVisitCount(item) {
 
 function getGroupVisitCount(item) {
   return Number(item?.totalVisitCount ?? item?.visitCount ?? 0);
+}
+
+function compareHistoryItemsByCandidateRank(left, right) {
+  const byCount = getTotalVisitCount(right) - getTotalVisitCount(left);
+  const byTime = getVisitTime(right) - getVisitTime(left);
+  const leftKey = String(left?.dedupeKey ?? left?.url ?? '');
+  const rightKey = String(right?.dedupeKey ?? right?.url ?? '');
+  return byCount || byTime || leftKey.localeCompare(rightKey);
+}
+
+// Stable group-internal contract: pinned state is applied later, then renamed,
+// visit count, latest visit time, and finally a deterministic key.
+function compareHistoryItemsWithinGroup(left, right) {
+  const byRename = Number(Boolean(right?.isTitleRenamed)) - Number(Boolean(left?.isTitleRenamed));
+  const byCount = getTotalVisitCount(right) - getTotalVisitCount(left);
+  const byTime = getVisitTime(right) - getVisitTime(left);
+  const leftKey = String(left?.dedupeKey ?? left?.url ?? '');
+  const rightKey = String(right?.dedupeKey ?? right?.url ?? '');
+  return byRename || byCount || byTime || leftKey.localeCompare(rightKey);
+}
+
+// Stable group-external contract: the best item represents its group. Pinned
+// items lead, then visit count, rename state, latest visit time, and key.
+function compareHistoryItemsBetweenGroups(left, right) {
+  const byPin = Number(Boolean(right?.isPinned)) - Number(Boolean(left?.isPinned));
+  const byPinOrder = (left?.pinOrder ?? Infinity) - (right?.pinOrder ?? Infinity);
+  const byCount = getTotalVisitCount(right) - getTotalVisitCount(left);
+  const byRename = Number(Boolean(right?.isTitleRenamed)) - Number(Boolean(left?.isTitleRenamed));
+  const byTime = getVisitTime(right) - getVisitTime(left);
+  const leftKey = String(left?.dedupeKey ?? left?.url ?? '');
+  const rightKey = String(right?.dedupeKey ?? right?.url ?? '');
+  return byPin || byPinOrder || byCount || byRename || byTime || leftKey.localeCompare(rightKey);
 }
 
 function getGroupKey(item, mode) {

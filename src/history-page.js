@@ -8,8 +8,7 @@ import {
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
   groupHistoryItems,
-  groupHistoryItemsByCandidateRank,
-  prioritizeRenamedHistoryItems
+  groupHistoryItemsByCandidateRank
 } from './history-utils.js';
 import {
   deleteGroupNameOverride,
@@ -207,13 +206,10 @@ function renderHistorySnapshot() {
   const visibleItems = showRenamedOnly
     ? matchedItems.filter((item) => item.isTitleRenamed)
     : matchedItems;
-  const rankedItems = query ? prioritizeRenamedHistoryItems(visibleItems) : visibleItems;
   const baseGroups = query
-    ? groupHistoryItemsByCandidateRank(rankedItems, 'domain')
-    : groupHistoryItems(rankedItems, 'domain');
-  const groupedItems = applyGroupNameOverridesToGroups(baseGroups, {
-    preserveOrder: Boolean(query)
-  });
+    ? groupHistoryItemsByCandidateRank(visibleItems, 'domain')
+    : groupHistoryItems(visibleItems, 'domain');
+  const groupedItems = applyGroupNameOverridesToGroups(baseGroups);
 
   currentGroups = showRenamedOnly ? [] : groupedItems;
   currentFlatItems = showRenamedOnly ? sortItemsByDisplayName(visibleItems) : [];
@@ -1057,15 +1053,13 @@ function closeGroupRenameDialog() {
   closeDialogElement(groupRenameDialog.element);
 }
 
-function applyGroupNameOverridesToGroups(groups, options = {}) {
-  return groups
-    .map((group, index) => {
+function applyGroupNameOverridesToGroups(groups) {
+  return groups.map((group) => {
       const overrideLabel = groupNameOverrides.get(group.key);
 
       if (!overrideLabel) {
         return {
           ...group,
-          originalIndex: index,
           originalLabel: group.label,
           isGroupRenamed: false
         };
@@ -1073,29 +1067,11 @@ function applyGroupNameOverridesToGroups(groups, options = {}) {
 
       return {
         ...group,
-        originalIndex: index,
         originalLabel: group.label,
         label: overrideLabel,
         isGroupRenamed: true
       };
-    })
-    .sort((left, right) => {
-      if (options.preserveOrder) {
-        return left.originalIndex - right.originalIndex;
-      }
-
-      const byRename = Number(right.isGroupRenamed) - Number(left.isGroupRenamed);
-      const byName = compareDisplayNames(getGroupDisplayName(left), getGroupDisplayName(right));
-      return byRename || byName || left.originalIndex - right.originalIndex;
-    })
-    .map((group) => {
-      const { originalIndex, ...publicGroup } = group;
-      return publicGroup;
     });
-}
-
-function getGroupDisplayName(group) {
-  return String(group?.label || group?.key || '').trim();
 }
 
 function closeRenameDialog() {

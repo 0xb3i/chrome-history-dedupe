@@ -15,8 +15,7 @@ import {
   groupHistoryItems,
   groupHistoryItemsByCandidateRank,
   normalizeHistoryKey,
-  prepareHistoryItemsForSearch,
-  prioritizeRenamedHistoryItems
+  prepareHistoryItemsForSearch
 } from '../src/history-utils.js';
 
 test('normalized URL mode collapses repeat visits and keeps the latest item', () => {
@@ -631,7 +630,7 @@ test('Dorado instance query variants collapse and keep the preferred representat
   assert.deepEqual(
     filterHistoryItemsByQuery([popular], 'dorado/instance?searchType=content')
       .map((item) => item.id),
-    ['popular-monitor']
+    []
   );
 
   const renamedItems = applyTitleOverridesToItems(
@@ -1093,6 +1092,135 @@ test('domain groups sort by the sum of visit counts across the group', () => {
   assert.equal(groups[1].totalVisitCount, 3);
 });
 
+test('page candidates sort by visit count before latest visit time', () => {
+  const candidates = dedupeHistoryItems([
+    {
+      id: 'newer-rare',
+      url: 'https://rare.example/page',
+      lastVisitTime: 500,
+      visitCount: 2
+    },
+    {
+      id: 'older-frequent',
+      url: 'https://frequent.example/page',
+      lastVisitTime: 100,
+      visitCount: 20
+    }
+  ], 'page-family');
+
+  assert.deepEqual(candidates.map((item) => item.id), ['older-frequent', 'newer-rare']);
+});
+
+test('groups rank by pinned then visit count then rename then latest visit time', () => {
+  const rankedItems = dedupeHistoryItems(
+    applyTitleOverridesToItems(
+      [
+        {
+          id: 'renamed-63',
+          title: 'Renamed 63',
+          url: 'https://renamed.example/page',
+          lastVisitTime: 500,
+          visitCount: 63
+        },
+        {
+          id: 'plain-183',
+          title: 'Plain 183',
+          url: 'https://frequent.example/page',
+          lastVisitTime: 100,
+          visitCount: 183
+        }
+      ],
+      new Map([['https://renamed.example/page', 'Custom 63']])
+    ),
+    'page-family'
+  );
+  const groups = applyPinnedStateToGroups(
+    groupHistoryItemsByCandidateRank(rankedItems),
+    new Set()
+  );
+
+  assert.deepEqual(groups.map((group) => group.key), [
+    'frequent.example',
+    'renamed.example'
+  ]);
+
+  const pinnedGroups = applyPinnedStateToGroups(
+    groupHistoryItemsByCandidateRank(rankedItems),
+    new Set(['https://renamed.example/page'])
+  );
+  assert.deepEqual(pinnedGroups.map((group) => group.key), [
+    'renamed.example',
+    'frequent.example'
+  ]);
+});
+
+test('items inside browsing groups sort by visit count before latest visit time', () => {
+  const [group] = groupHistoryItems([
+    {
+      id: 'newer-rare',
+      url: 'https://example.com/newer',
+      lastVisitTime: 500,
+      visitCount: 2
+    },
+    {
+      id: 'older-frequent',
+      url: 'https://example.com/frequent',
+      lastVisitTime: 100,
+      visitCount: 20
+    }
+  ]);
+
+  assert.deepEqual(group.items.map((item) => item.id), ['older-frequent', 'newer-rare']);
+});
+
+test('group items follow renamed then visit count then latest visit time', () => {
+  const groups = groupHistoryItems(
+    applyTitleOverridesToItems(
+      [
+        {
+          id: 'frequent-plain',
+          title: 'Frequent Plain',
+          url: 'https://example.com/frequent',
+          lastVisitTime: 100,
+          visitCount: 183
+        },
+        {
+          id: 'renamed-lower-count',
+          title: 'Renamed Lower Count',
+          url: 'https://example.com/renamed-lower',
+          lastVisitTime: 500,
+          visitCount: 63
+        },
+        {
+          id: 'plain-equal-count',
+          title: 'Plain Equal Count',
+          url: 'https://example.com/plain-equal',
+          lastVisitTime: 600,
+          visitCount: 20
+        },
+        {
+          id: 'renamed-equal-count',
+          title: 'Renamed Equal Count',
+          url: 'https://example.com/renamed-equal',
+          lastVisitTime: 200,
+          visitCount: 20
+        }
+      ],
+      new Map([
+        ['https://example.com/renamed-lower', 'Custom Lower'],
+        ['https://example.com/renamed-equal', 'Custom Equal']
+      ])
+    )
+  );
+
+  assert.deepEqual(groups[0].items.map((item) => item.id), [
+    'renamed-lower-count',
+    'renamed-equal-count',
+    'frequent-plain',
+    'plain-equal-count'
+  ]);
+});
+
 test('domain groups prefer item totalVisitCount when summing group frequency', () => {
   const groups = groupHistoryItems([
     {
@@ -1116,26 +1244,6 @@ test('domain groups prefer item totalVisitCount when summing group frequency', (
     ['a.example', 'b.example']
   );
   assert.equal(groups[0].totalVisitCount, 7);
-});
-
-test('keyword search ranks renamed tab candidates before grouping without disturbing either tier', () => {
-  const items = applyTitleOverridesToItems(
-    [
-      { id: 'plain-first', title: 'AB Guide', url: 'https://a.example/guide', lastVisitTime: 500 },
-      { id: 'renamed-first', title: 'AB Notes', url: 'https://b.example/notes', lastVisitTime: 400 },
-      { id: 'renamed-second', title: 'AB Docs', url: 'https://c.example/docs', lastVisitTime: 300 },
-      { id: 'plain-second', title: 'AB Home', url: 'https://d.example/home', lastVisitTime: 200 }
-    ],
-    new Map([
-      ['https://b.example/notes', 'AB Renamed Notes'],
-      ['https://c.example/docs', 'AB Renamed Docs']
-    ])
-  );
-
-  assert.deepEqual(
-    prioritizeRenamedHistoryItems(items).map((item) => item.id),
-    ['renamed-first', 'renamed-second', 'plain-first', 'plain-second']
-  );
 });
 
 test('candidate-ranked grouping follows the best matching tab instead of group traffic', () => {
@@ -1402,7 +1510,7 @@ test('page title dedupe keeps tab variants of one resource together', () => {
   ]);
 });
 
-test('query filtering searches effective renamed titles and URLs', () => {
+test('query filtering searches effective titles but never URLs', () => {
   const rawItems = [
     {
       id: 'renamed',
@@ -1428,7 +1536,7 @@ test('query filtering searches effective renamed titles and URLs', () => {
   );
   assert.deepEqual(
     filterHistoryItemsByQuery(renamedItems, 'docs.example.com').map((item) => item.id),
-    ['plain']
+    []
   );
   assert.deepEqual(
     filterHistoryItemsByQuery(renamedItems, 'Original Title').map((item) => item.id),
@@ -1468,7 +1576,7 @@ test('Chinese shorthand search matches a bounded phrase in the real renamed Feis
   assert.deepEqual(filterHistoryItemsByQuery([renamedItem], '大面试'), []);
 });
 
-test('plain keywords search titles only and ignore hidden URL parameters', () => {
+test('search matches titles only and ignores every part of URLs', () => {
   const items = [
     {
       id: 'unrelated-doc',
@@ -1488,8 +1596,11 @@ test('plain keywords search titles only and ignore hidden URL parameters', () =>
   );
   assert.deepEqual(
     filterHistoryItemsByQuery(items, 'https://example.com/wiki/abc12345').map((item) => item.id),
-    ['unrelated-doc']
+    []
   );
+  assert.deepEqual(filterHistoryItemsByQuery(items, 'example.com'), []);
+  assert.deepEqual(filterHistoryItemsByQuery(items, 'abc12345'), []);
+  assert.deepEqual(filterHistoryItemsByQuery(items, 'source'), []);
 });
 
 test('pinned pages move to the top of their group and support multiple pins', () => {
@@ -1563,7 +1674,7 @@ test('pinned pages follow the order they were pinned instead of visit time or UR
   );
 });
 
-test('renamed pages sort after pinned pages and before natural group order', () => {
+test('renamed pages sort after pinned pages and before visit-priority order', () => {
   const groups = groupHistoryItems(
     applyTitleOverridesToItems(
       [

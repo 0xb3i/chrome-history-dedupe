@@ -284,9 +284,8 @@ test('search query expands grouped results automatically', () => {
 });
 
 test('search grouping preserves tab candidate rank while browsing keeps group ranking', () => {
-  assert.equal(historyPageJs.includes('prioritizeRenamedHistoryItems(visibleItems)'), true);
-  assert.equal(historyPageJs.includes('groupHistoryItemsByCandidateRank(rankedItems'), true);
-  assert.equal(historyPageJs.includes('preserveOrder: Boolean(query)'), true);
+  assert.equal(historyPageJs.includes('prioritizeRenamedHistoryItems'), false);
+  assert.equal(historyPageJs.includes('groupHistoryItemsByCandidateRank(visibleItems'), true);
 });
 
 test('history search surfaces restore and remember the last search state', () => {
@@ -481,10 +480,8 @@ test('domain groups can be renamed and restored', () => {
   assert.equal(historyPageJs.includes("fieldLabel: '分组名'"), true);
   assert.equal(historyPageJs.includes('restoreGroupOriginalName'), true);
   assert.equal(historyPageJs.includes('applyGroupNameOverridesToGroups'), true);
-  assert.equal(historyPageJs.includes('Number(right.isGroupRenamed) - Number(left.isGroupRenamed)'), true);
-  assert.equal(historyPageJs.includes('compareDisplayNames(getGroupDisplayName(left), getGroupDisplayName(right))'), true);
-  assert.equal(historyPageJs.includes('function getGroupDisplayName(group)'), true);
-  assert.equal(historyPageJs.includes('left.originalIndex - right.originalIndex'), true);
+  assert.equal(historyPageJs.includes('Number(right.isGroupRenamed) - Number(left.isGroupRenamed)'), false);
+  assert.equal(historyPageJs.includes('function getGroupDisplayName(group)'), false);
 });
 
 test('rename shortcut has a focused extension window surface', () => {
