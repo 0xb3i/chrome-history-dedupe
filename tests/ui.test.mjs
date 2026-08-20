@@ -74,6 +74,13 @@ test('background captures final tab titles for current and future tabs', () => {
   assert.equal(backgroundJs.includes('navigationUrls'), true);
 });
 
+test('shortcut service-worker wakeups do not start competing index or title maintenance', () => {
+  assert.equal(backgroundJs.includes('\n\ncaptureOpenTabTitles();\n'), false);
+  assert.equal(backgroundJs.includes('void historyIndexService.ensureReady().catch'), false);
+  assert.match(backgroundJs, /onStartup\?\.addListener\(\(\) => \{\s+captureOpenTabTitles\(\);/);
+  assert.match(backgroundJs, /onInstalled\?\.addListener\(\(\) => \{[\s\S]*?captureOpenTabTitles\(\);/);
+});
+
 test('background incrementally updates the persistent index when history changes', () => {
   assert.equal(backgroundJs.includes('history?.onVisited?.addListener'), true);
   assert.equal(backgroundJs.includes('history?.onVisitRemoved?.addListener'), true);
@@ -97,11 +104,21 @@ test('history page reads atomic IndexedDB generations and never performs API ref
 });
 
 test('renamed pages remain visible outside the selected time window', () => {
-  assert.equal(historyIndexDeriveJs.includes('appendTimeExemptRenamedItems(windowItems, titleOverrides, {'), true);
-  assert.equal(historyIndexDeriveJs.includes('allHistoryItems: items'), true);
+  assert.equal(historyIndexDeriveJs.includes('appendTimeExemptRenamedItemsCooperatively('), true);
+  assert.equal(historyIndexDeriveJs.includes('allHistoryItems: capturedItems'), true);
   assert.equal(historyDataJs.includes('existingPageKeys.has(pageKey)'), true);
   assert.equal(historyDataJs.includes('renamedPageKeys.has(pageKey)'), true);
   assert.equal(backgroundJs.includes('historyIndexService.rebuildDerived'), true);
+});
+
+test('cached search snapshots apply the latest title overrides before background rebuilds finish', () => {
+  assert.equal(historyPageJs.includes('loadTitleOverrides()'), true);
+  assert.equal(historyPageJs.includes('committedPageItemsSnapshot = index.pageItems;'), true);
+  assert.equal(historyPageJs.includes('applyLatestTitleOverrides(committedPageItemsSnapshot)'), true);
+  assert.equal(historyPageJs.includes('changes[TITLE_OVERRIDES_STORAGE_KEY]'), true);
+  assert.equal(historyPageJs.includes('normalizePageTitleOverrideMap('), true);
+  assert.equal(historyPageJs.includes('HISTORY_INDEX_REBUILD_MESSAGE'), false);
+  assert.equal(historyPageJs.includes('refreshDerivedHistoryIndex()'), false);
 });
 
 test('history surfaces do not expose a max results control', () => {
@@ -188,11 +205,13 @@ test('result metadata omits merge count and shortens dates for the current year'
   assert.equal(historyPageJs.includes('至少 ${visitCount} 次访问'), false);
 });
 
-test('popup search controls stay on one row despite mobile media rules', () => {
+test('popup establishes a stable width before Chrome measures it and scrolls vertically', () => {
   const css = readText('../src/styles.css');
 
-  assert.equal(css.includes('width: 620px;'), true);
-  assert.equal(css.includes('max-height: 760px;'), true);
+  assert.equal(popupHtml.includes('<html class="popup-root" lang="zh-CN">'), true);
+  assert.match(css, /\.popup-root \{[\s\S]*?width: 580px;[\s\S]*?min-width: 580px;[\s\S]*?overflow: hidden;/);
+  assert.match(css, /\.popup-body \{[\s\S]*?width: 580px;[\s\S]*?min-width: 580px;[\s\S]*?max-height: 560px;[\s\S]*?overflow-x: hidden;[\s\S]*?overflow-y: auto;/);
+  assert.equal(css.includes('max-width: 100vw;'), false);
   assert.equal(css.includes('max-height: none;'), true);
   assert.equal(css.includes('grid-template-columns: minmax(260px, 520px) minmax(120px, 142px) auto;'), true);
   assert.equal(css.includes('justify-content: start;'), true);
@@ -262,6 +281,12 @@ test('history groups do not open the first group by default', () => {
 
 test('search query expands grouped results automatically', () => {
   assert.equal(historyPageJs.includes('expandAll: Boolean(query)'), true);
+});
+
+test('search grouping preserves tab candidate rank while browsing keeps group ranking', () => {
+  assert.equal(historyPageJs.includes('prioritizeRenamedHistoryItems(visibleItems)'), true);
+  assert.equal(historyPageJs.includes('groupHistoryItemsByCandidateRank(rankedItems'), true);
+  assert.equal(historyPageJs.includes('preserveOrder: Boolean(query)'), true);
 });
 
 test('history search surfaces restore and remember the last search state', () => {
@@ -497,19 +522,31 @@ test('rename shortcut falls back to a popup centered over the active browser win
 });
 
 test('rename shortcut prefers an inline dialog on the active page before using a popup', () => {
-  assert.equal(backgroundJs.includes('if (await openInlineRenameDialog(tab, draft))'), true);
+  assert.equal(backgroundJs.includes('prepareInlineRenameDialog(tab)'), true);
+  assert.equal(backgroundJs.includes('inlineDialogReady && await showInlineRenameDialog(tab, draft)'), true);
+  assert.equal(backgroundJs.includes('const [draft, inlineDialogReady] = await Promise.all(['), true);
+  assert.equal(backgroundJs.includes('waitForInlineRenamePreparation('), true);
   assert.equal(backgroundJs.includes("const INLINE_RENAME_SCRIPT = 'src/rename-overlay.js';"), true);
   assert.equal(backgroundJs.includes('chrome.scripting.executeScript'), true);
   assert.equal(backgroundJs.includes('chrome.tabs.sendMessage'), true);
   assert.equal(backgroundJs.includes('saveInlineRename'), true);
   assert.equal(backgroundJs.includes('restoreInlineRename'), true);
+  assert.equal(backgroundJs.includes('scheduleDerivedIndexRebuild();'), true);
+  assert.equal(backgroundJs.includes('await historyIndexService.rebuildDerived({ immediate: true })'), false);
   assert.equal(backgroundJs.includes('await saveRenameDraft(draft);'), true);
   assert.equal(backgroundJs.includes('await createRenameWindow(draft.id, tab.windowId);'), true);
   assert.equal(
-    backgroundJs.indexOf('openInlineRenameDialog(tab, draft)') <
+    backgroundJs.indexOf('showInlineRenameDialog(tab, draft)') <
       backgroundJs.indexOf('createRenameWindow(draft.id, tab.windowId)'),
     true
   );
+});
+
+test('queued rename shortcuts collapse to the latest request', () => {
+  assert.equal(backgroundJs.includes('let latestRenameRequestId = 0;'), true);
+  assert.equal(backgroundJs.includes('latestRenameRequestId += 1;'), true);
+  assert.equal(backgroundJs.includes('openRenameWindowForCurrentPage(latestRenameRequestId)'), true);
+  assert.equal(backgroundJs.includes('requestId !== latestRenameRequestId'), true);
 });
 
 test('inline rename dialog can save, restore, cancel, and close with Escape', () => {

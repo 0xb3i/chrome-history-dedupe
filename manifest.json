@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "历史记录去重搜索",
-  "version": "0.5.0",
+  "version": "0.6.8",
   "description": "搜索 Chrome 历史记录，并自动合并同一页面的重复 URL 与子标签页。",
   "icons": {
     "16": "icons/icon-16.png",

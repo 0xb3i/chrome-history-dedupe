@@ -9,6 +9,7 @@ const META_STORE = 'meta';
 const RAW_ITEMS_STORE = 'raw-items';
 const INDEX_CHUNKS_STORE = 'index-chunks';
 const INDEX_CHUNK_SIZE = 250;
+const INDEX_WRITE_BATCH_SIZE = 20;
 const STATE_KEY = 'state';
 
 export function createHistoryIndexStore(options = {}) {
@@ -89,17 +90,22 @@ export function createHistoryIndexStore(options = {}) {
         }));
       }
 
-      const result = await commitGeneration(
+      await writeGenerationRecords(database, records);
+      const result = await activateGeneration(
         database,
-        records,
         generation,
         chunksByRange,
         Number(expectedRawRevision),
         builtAt
       );
 
+      if (!result) {
+        void deleteGeneration(database, keyRangeApi, generation).catch(() => {});
+        return null;
+      }
+
       if (result?.previousGeneration && result.previousGeneration !== generation) {
-        void deleteGeneration(database, result.previousGeneration).catch(() => {});
+        void deleteGeneration(database, keyRangeApi, result.previousGeneration).catch(() => {});
       }
 
       return result;
@@ -163,11 +169,22 @@ function mutateRawItems(database, mutation) {
   });
 }
 
-function commitGeneration(database, records, generation, chunksByRange, expectedRawRevision, builtAt) {
+async function writeGenerationRecords(database, records) {
+  for (let start = 0; start < records.length; start += INDEX_WRITE_BATCH_SIZE) {
+    const transaction = database.transaction(INDEX_CHUNKS_STORE, 'readwrite');
+    const store = transaction.objectStore(INDEX_CHUNKS_STORE);
+    for (const record of records.slice(start, start + INDEX_WRITE_BATCH_SIZE)) {
+      store.put(record);
+    }
+    await transactionResult(transaction, 'History index chunk write failed');
+    await yieldControl();
+  }
+}
+
+function activateGeneration(database, generation, chunksByRange, expectedRawRevision, builtAt) {
   return new Promise((resolve, reject) => {
-    const transaction = database.transaction([META_STORE, INDEX_CHUNKS_STORE], 'readwrite');
+    const transaction = database.transaction(META_STORE, 'readwrite');
     const metaStore = transaction.objectStore(META_STORE);
-    const chunkStore = transaction.objectStore(INDEX_CHUNKS_STORE);
     const stateRequest = metaStore.get(STATE_KEY);
     let result = null;
     let stale = false;
@@ -180,7 +197,6 @@ function commitGeneration(database, records, generation, chunksByRange, expected
         return;
       }
 
-      for (const record of records) chunkStore.put(record);
       const committedRevision = state.committedRevision + 1;
       metaStore.put({
         ...state,
@@ -209,15 +225,19 @@ function commitGeneration(database, records, generation, chunksByRange, expected
   });
 }
 
-async function deleteGeneration(database, generation) {
+async function deleteGeneration(database, keyRangeApi, generation) {
   return new Promise((resolve, reject) => {
     const transaction = database.transaction(INDEX_CHUNKS_STORE, 'readwrite');
     const store = transaction.objectStore(INDEX_CHUNKS_STORE);
-    const request = store.openKeyCursor();
+    const generationRange = keyRangeApi.bound(
+      [generation, ''],
+      [generation, '\uffff']
+    );
+    const request = store.index('by-generation-range').openKeyCursor(generationRange);
     request.onsuccess = () => {
       const cursor = request.result;
       if (!cursor) return;
-      if (String(cursor.primaryKey).startsWith(`${generation}:`)) store.delete(cursor.primaryKey);
+      store.delete(cursor.primaryKey);
       cursor.continue();
     };
     transaction.oncomplete = () => resolve();
@@ -304,4 +324,16 @@ function requestResult(request) {
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed'));
   });
+}
+
+function transactionResult(transaction, fallbackMessage) {
+  return new Promise((resolve, reject) => {
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error(fallbackMessage));
+    transaction.onabort = () => reject(transaction.error ?? new Error(fallbackMessage));
+  });
+}
+
+function yieldControl() {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
 }

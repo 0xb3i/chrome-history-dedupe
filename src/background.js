@@ -6,13 +6,14 @@ import {
   CAPTURED_PAGE_TITLES_STORAGE_KEY,
   deleteTitleOverrides,
   loadTitleOverrides,
-  saveCapturedPageTitle,
+  saveCapturedPageTitles,
   saveRenameDraft,
   saveTitleOverride,
   TITLE_OVERRIDES_STORAGE_KEY
 } from './storage.js';
 import { createNavigationTracker } from './navigation-tracker.js';
 import { getCenteredCoordinate } from './window-placement.js';
+import { waitForInlineRenamePreparation } from './rename-shortcut.js';
 import { createHistoryIndexStore } from './history-index/store.js';
 import { createHistoryIndexService } from './history-index/service.js';
 import {
@@ -29,7 +30,11 @@ const INLINE_RENAME_SCRIPT = 'src/rename-overlay.js';
 const INLINE_RENAME_INIT_MESSAGE = 'deduped-history:init-inline-rename';
 const INLINE_RENAME_SAVE_MESSAGE = 'deduped-history:save-inline-rename';
 const INLINE_RENAME_RESTORE_MESSAGE = 'deduped-history:restore-inline-rename';
-let capturedTitleWriteQueue = Promise.resolve();
+const CAPTURED_TITLE_FLUSH_DELAY_MS = 100;
+const pendingCapturedTitleWrites = new Map();
+let capturedTitleFlushTimer = null;
+let capturedTitleFlushPromise = null;
+let latestRenameRequestId = 0;
 const navigationTracker = createNavigationTracker();
 const historyIndexStore = createHistoryIndexStore();
 const historyIndexService = createHistoryIndexService({
@@ -66,14 +71,16 @@ globalThis.chrome?.storage?.onChanged?.addListener((changes, areaName) => {
     areaName === 'local' &&
     (changes[TITLE_OVERRIDES_STORAGE_KEY] || changes[CAPTURED_PAGE_TITLES_STORAGE_KEY])
   ) {
-    void historyIndexService.rebuildDerived().catch(() => {});
+    scheduleDerivedIndexRebuild();
   }
 });
 globalThis.chrome?.runtime?.onStartup?.addListener(() => {
+  captureOpenTabTitles();
   void historyIndexService.calibrate().catch(() => {});
 });
 globalThis.chrome?.runtime?.onInstalled?.addListener(() => {
   scheduleHistoryIndexAlarm();
+  captureOpenTabTitles();
   void historyIndexService.calibrate().catch(() => {});
 });
 globalThis.chrome?.alarms?.onAlarm?.addListener((alarm) => {
@@ -82,11 +89,10 @@ globalThis.chrome?.alarms?.onAlarm?.addListener((alarm) => {
   }
 });
 
-captureOpenTabTitles();
-
 globalThis.chrome?.commands?.onCommand?.addListener((command) => {
   if (command === RENAME_CURRENT_PAGE_COMMAND) {
-    openRenameWindowForCurrentPage();
+    latestRenameRequestId += 1;
+    openRenameWindowForCurrentPage(latestRenameRequestId);
   }
 });
 
@@ -123,7 +129,6 @@ globalThis.chrome?.runtime?.onMessage?.addListener((message, _sender, sendRespon
 });
 
 scheduleHistoryIndexAlarm();
-void historyIndexService.ensureReady().catch(() => {});
 
 async function captureOpenTabTitles() {
   try {
@@ -142,12 +147,44 @@ function enqueueCapturedTabTitle(tab, navigationUrls = [tab?.url]) {
   }
 
   const aliases = new Set([...navigationUrls, tab.url].filter(Boolean));
+  const updatedAt = Date.now();
 
   for (const url of aliases) {
-    const titleKey = getHistoryItemCapturedTitleKey({ url });
-    capturedTitleWriteQueue = capturedTitleWriteQueue
-      .then(() => saveCapturedPageTitle(titleKey, tab.title, { resolvedUrl: tab.url }))
-      .catch(() => {});
+    const key = getHistoryItemCapturedTitleKey({ url });
+    pendingCapturedTitleWrites.set(key, {
+      key,
+      title: tab.title,
+      resolvedUrl: tab.url,
+      updatedAt
+    });
+  }
+
+  scheduleCapturedTitleFlush();
+}
+
+function scheduleCapturedTitleFlush() {
+  if (capturedTitleFlushTimer !== null || capturedTitleFlushPromise) {
+    return;
+  }
+
+  capturedTitleFlushTimer = globalThis.setTimeout(() => {
+    capturedTitleFlushTimer = null;
+    capturedTitleFlushPromise = flushPendingCapturedTitles()
+      .catch(() => {})
+      .finally(() => {
+        capturedTitleFlushPromise = null;
+        if (pendingCapturedTitleWrites.size > 0) {
+          scheduleCapturedTitleFlush();
+        }
+      });
+  }, CAPTURED_TITLE_FLUSH_DELAY_MS);
+}
+
+async function flushPendingCapturedTitles() {
+  while (pendingCapturedTitleWrites.size > 0) {
+    const entries = [...pendingCapturedTitleWrites.values()];
+    pendingCapturedTitleWrites.clear();
+    await saveCapturedPageTitles(entries);
   }
 }
 
@@ -155,17 +192,28 @@ function isCapturableTab(tab) {
   return /^(https?|file):/i.test(String(tab?.url ?? '')) && Boolean(String(tab?.title ?? '').trim());
 }
 
-async function openRenameWindowForCurrentPage() {
+async function openRenameWindowForCurrentPage(requestId) {
   try {
     const tab = await getActiveTab();
 
-    if (!tab?.url) {
+    if (requestId !== latestRenameRequestId || !tab?.url) {
       return;
     }
 
-    const draft = await createRenameDraft(tab);
+    const [draft, inlineDialogReady] = await Promise.all([
+      createRenameDraft(tab),
+      prepareInlineRenameDialog(tab)
+    ]);
 
-    if (await openInlineRenameDialog(tab, draft)) {
+    if (requestId !== latestRenameRequestId) {
+      return;
+    }
+
+    if (inlineDialogReady && await showInlineRenameDialog(tab, draft)) {
+      return;
+    }
+
+    if (requestId !== latestRenameRequestId) {
       return;
     }
 
@@ -176,13 +224,18 @@ async function openRenameWindowForCurrentPage() {
   }
 }
 
-async function openInlineRenameDialog(tab, draft) {
+async function prepareInlineRenameDialog(tab) {
   if (typeof tab?.id !== 'number') {
     return false;
   }
 
+  return waitForInlineRenamePreparation(
+    executeScriptInTab(tab.id, [INLINE_RENAME_SCRIPT])
+  );
+}
+
+async function showInlineRenameDialog(tab, draft) {
   try {
-    await executeScriptInTab(tab.id, [INLINE_RENAME_SCRIPT]);
     await sendMessageToTab(tab.id, {
       type: INLINE_RENAME_INIT_MESSAGE,
       draft: toInlineRenameDraft(draft)
@@ -227,12 +280,14 @@ async function saveInlineRename(message) {
   await saveTitleOverride(message?.titleOverrideKey, message?.title, {
     targetUrl: message?.url
   });
-  await historyIndexService.rebuildDerived({ immediate: true });
 }
 
 async function restoreInlineRename(message) {
   await deleteTitleOverrides([message?.titleOverrideKey]);
-  await historyIndexService.rebuildDerived({ immediate: true });
+}
+
+function scheduleDerivedIndexRebuild() {
+  void historyIndexService.rebuildDerived().catch(() => {});
 }
 
 function scheduleHistoryIndexAlarm() {

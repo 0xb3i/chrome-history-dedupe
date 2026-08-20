@@ -126,6 +126,52 @@ export function appendTimeExemptRenamedItems(items, titleOverrides, options = {}
   return restoredItems.length > 0 ? [...windowItems, ...restoredItems] : windowItems;
 }
 
+export async function appendTimeExemptRenamedItemsCooperatively(
+  items,
+  titleOverrides,
+  options = {}
+) {
+  const windowItems = Array.isArray(items) ? items : [];
+  const allHistoryItems = Array.isArray(options.allHistoryItems)
+    ? options.allHistoryItems
+    : windowItems;
+  const overrides = titleOverrides instanceof Map
+    ? titleOverrides
+    : new Map(Object.entries(titleOverrides ?? {}));
+  const batchSize = normalizePositiveInteger(options.batchSize, 1000);
+  const yieldControl = options.yieldControl ?? defaultCooperativeYield;
+  const existingPageKeys = new Set();
+
+  for (let index = 0; index < windowItems.length; index += 1) {
+    const pageKey = getPageIdentityKey(windowItems[index]?.url);
+    if (pageKey) existingPageKeys.add(pageKey);
+    if ((index + 1) % batchSize === 0) await yieldControl();
+  }
+
+  const renamedPageKeys = new Set();
+  for (const [storedKey, record] of overrides) {
+    const targetUrl = String(record?.targetUrl ?? '').trim();
+    const pageKey = getPageIdentityKey(targetUrl) || String(storedKey ?? '').trim();
+    if (pageKey && !existingPageKeys.has(pageKey)) renamedPageKeys.add(pageKey);
+  }
+
+  if (renamedPageKeys.size === 0) {
+    return windowItems;
+  }
+
+  const restoredItems = [];
+  for (let index = 0; index < allHistoryItems.length; index += 1) {
+    const item = allHistoryItems[index];
+    const pageKey = getPageIdentityKey(item?.url);
+    if (renamedPageKeys.has(pageKey) && !existingPageKeys.has(pageKey)) {
+      restoredItems.push(item);
+    }
+    if ((index + 1) % batchSize === 0) await yieldControl();
+  }
+
+  return restoredItems.length > 0 ? [...windowItems, ...restoredItems] : windowItems;
+}
+
 function resolveChromeApis(options) {
   const chromeApi = options.chromeApi ?? globalThis.chrome;
 
@@ -189,4 +235,8 @@ function createChromeApiError(lastError, fallbackMessage) {
     ? lastError.message
     : fallbackMessage;
   return new Error(message);
+}
+
+function defaultCooperativeYield() {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
 }

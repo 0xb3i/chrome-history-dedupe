@@ -13,6 +13,7 @@ const DISPLAY_NAME_COLLATOR = new Intl.Collator('zh-CN', {
 });
 const HAN_KEYWORD_PATTERN = /^\p{Script=Han}{3,}$/u;
 const MAX_HAN_SUBSEQUENCE_SKIPS = 4;
+const DEFAULT_COOPERATIVE_BATCH_SIZE = 1000;
 export function normalizeHistoryKey(item, mode = DEFAULT_MODE) {
   const rawUrl = String(item?.dedupeUrl || item?.url || '');
 
@@ -41,54 +42,117 @@ export function dedupeHistoryItems(items, mode = DEFAULT_MODE) {
   const buckets = new Map();
 
   for (const item of items) {
-    const dedupeKey = normalizeHistoryKey(item, mode);
-    const current = buckets.get(dedupeKey);
-
-    if (!current) {
-      buckets.set(dedupeKey, decorateItem(item, dedupeKey, {
-        dedupeCount: getDedupeCount(item),
-        lastVisitTime: getVisitTime(item),
-        pinKeys: getItemPinKeys(item),
-        representativeLastVisitTime: getRepresentativeVisitTime(item),
-        representativeVisitCount: getRepresentativeVisitCount(item),
-        searchableTitles: getItemSearchableTitles(item),
-        searchableUrls: getItemSearchableUrls(item),
-        titleOverrideKeys: getItemTitleOverrideKeys(item),
-        totalVisitCount: getTotalVisitCount(item)
-      }));
-      continue;
-    }
-
-    const preferred = pickPreferredItem(current, item, mode);
-    const totalVisitCount = getTotalVisitCount(current) + getTotalVisitCount(item);
-    const isNormalizedUrlBucket = mode === 'normalized-url';
-    buckets.set(dedupeKey, decorateItem(preferred, dedupeKey, {
-      dedupeCount: getDedupeCount(current) + getDedupeCount(item),
-      lastVisitTime: Math.max(getVisitTime(current), getVisitTime(item)),
-      pinKeys: mergeStringValues(getItemPinKeys(current), getItemPinKeys(item)),
-      representativeLastVisitTime: isNormalizedUrlBucket
-        ? Math.max(getRepresentativeVisitTime(current), getRepresentativeVisitTime(item))
-        : getRepresentativeVisitTime(preferred),
-      representativeVisitCount: isNormalizedUrlBucket
-        ? getRepresentativeVisitCount(current) + getRepresentativeVisitCount(item)
-        : getRepresentativeVisitCount(preferred),
-      searchableTitles: mergeStringValues(
-        getItemSearchableTitles(current),
-        getItemSearchableTitles(item)
-      ),
-      searchableUrls: mergeStringValues(getItemSearchableUrls(current), getItemSearchableUrls(item)),
-      titleOverrideKeys: mergeTitleOverrideKeys(current, item),
-      totalVisitCount
-    }));
+    addHistoryItemToDedupeBuckets(buckets, item, mode);
   }
 
-  return [...buckets.values()].sort((left, right) => {
+  return finalizeDedupeBuckets(buckets);
+}
+
+export async function dedupeHistoryItemsCooperatively(items, mode = DEFAULT_MODE, options = {}) {
+  const buckets = new Map();
+  const batchSize = getCooperativeBatchSize(options.batchSize);
+  const yieldControl = options.yieldControl ?? defaultCooperativeYield;
+
+  for (let index = 0; index < items.length; index += 1) {
+    addHistoryItemToDedupeBuckets(buckets, items[index], mode);
+    if ((index + 1) % batchSize === 0) await yieldControl();
+  }
+
+  await yieldControl();
+  return finalizeDedupeBuckets(buckets);
+}
+
+function addHistoryItemToDedupeBuckets(buckets, item, mode) {
+  const dedupeKey = normalizeHistoryKey(item, mode);
+  const accumulator = buckets.get(dedupeKey);
+
+  if (!accumulator) {
+    buckets.set(dedupeKey, {
+      dedupeKey,
+      preferred: item,
+      dedupeCount: getDedupeCount(item),
+      lastVisitTime: getVisitTime(item),
+      pinKeys: new Set(getItemPinKeys(item)),
+      representativeLastVisitTime: getRepresentativeVisitTime(item),
+      representativeVisitCount: getRepresentativeVisitCount(item),
+      searchableTitles: new Set(getItemSearchableTitles(item)),
+      searchableUrls: new Set(getItemSearchableUrls(item)),
+      titleOverrideKeys: new Set(getItemTitleOverrideKeys(item)),
+      totalVisitCount: getTotalVisitCount(item)
+    });
+    return;
+  }
+
+  const current = {
+    ...accumulator.preferred,
+    representativeLastVisitTime: accumulator.representativeLastVisitTime,
+    representativeVisitCount: accumulator.representativeVisitCount,
+    totalVisitCount: accumulator.totalVisitCount
+  };
+  const preferred = pickPreferredItem(current, item, mode);
+  const isNormalizedUrlBucket = mode === 'normalized-url';
+  if (preferred !== current) accumulator.preferred = preferred;
+  accumulator.dedupeCount += getDedupeCount(item);
+  accumulator.lastVisitTime = Math.max(accumulator.lastVisitTime, getVisitTime(item));
+  addStringValues(accumulator.pinKeys, getItemPinKeys(item));
+  accumulator.representativeLastVisitTime = isNormalizedUrlBucket
+    ? Math.max(accumulator.representativeLastVisitTime, getRepresentativeVisitTime(item))
+    : getRepresentativeVisitTime(preferred);
+  accumulator.representativeVisitCount = isNormalizedUrlBucket
+    ? accumulator.representativeVisitCount + getRepresentativeVisitCount(item)
+    : getRepresentativeVisitCount(preferred);
+  addStringValues(accumulator.searchableTitles, getItemSearchableTitles(item));
+  addStringValues(accumulator.searchableUrls, getItemSearchableUrls(item));
+  addStringValues(accumulator.titleOverrideKeys, getItemTitleOverrideKeys(item));
+  accumulator.totalVisitCount += getTotalVisitCount(item);
+}
+
+function finalizeDedupeBuckets(buckets) {
+  return [...buckets.values()].map((accumulator) => decorateItem(
+    accumulator.preferred,
+    accumulator.dedupeKey,
+    {
+      dedupeCount: accumulator.dedupeCount,
+      lastVisitTime: accumulator.lastVisitTime,
+      pinKeys: [...accumulator.pinKeys],
+      representativeLastVisitTime: accumulator.representativeLastVisitTime,
+      representativeVisitCount: accumulator.representativeVisitCount,
+      searchableTitles: [...accumulator.searchableTitles],
+      searchableUrls: [...accumulator.searchableUrls],
+      titleOverrideKeys: [...accumulator.titleOverrideKeys],
+      totalVisitCount: accumulator.totalVisitCount
+    }
+  )).sort((left, right) => {
     const byTime = getVisitTime(right) - getVisitTime(left);
     return byTime || left.dedupeKey.localeCompare(right.dedupeKey);
   });
 }
 
 export function groupHistoryItems(items, mode = 'domain') {
+  return collectHistoryGroups(items, mode)
+    .map((group) => ({
+      ...group,
+      items: [...group.items].sort((left, right) => {
+        const byTime = getVisitTime(right) - getVisitTime(left);
+        return byTime || String(left.url ?? '').localeCompare(String(right.url ?? ''));
+      })
+    }))
+    .sort((left, right) => {
+      const byCount = right.totalVisitCount - left.totalVisitCount;
+      if (byCount) {
+        return byCount;
+      }
+
+      const byTime = right.lastVisitTime - left.lastVisitTime;
+      return byTime || left.key.localeCompare(right.key);
+    });
+}
+
+export function groupHistoryItemsByCandidateRank(items, mode = 'domain') {
+  return collectHistoryGroups(items, mode);
+}
+
+function collectHistoryGroups(items, mode) {
   const buckets = new Map();
 
   for (const item of items) {
@@ -113,23 +177,21 @@ export function groupHistoryItems(items, mode = 'domain') {
     current.totalVisitCount += getGroupVisitCount(item);
   }
 
-  return [...buckets.values()]
-    .map((group) => ({
-      ...group,
-      items: [...group.items].sort((left, right) => {
-        const byTime = getVisitTime(right) - getVisitTime(left);
-        return byTime || String(left.url ?? '').localeCompare(String(right.url ?? ''));
-      })
+  return [...buckets.values()];
+}
+
+export function prioritizeRenamedHistoryItems(items) {
+  return items
+    .map((item, originalIndex) => ({
+      item,
+      originalIndex,
+      hasRenamePriority: Boolean(item?.isTitleRenamed)
     }))
     .sort((left, right) => {
-      const byCount = right.totalVisitCount - left.totalVisitCount;
-      if (byCount) {
-        return byCount;
-      }
-
-      const byTime = right.lastVisitTime - left.lastVisitTime;
-      return byTime || left.key.localeCompare(right.key);
-    });
+      const byRename = Number(right.hasRenamePriority) - Number(left.hasRenamePriority);
+      return byRename || left.originalIndex - right.originalIndex;
+    })
+    .map(({ item }) => item);
 }
 
 export function formatHistoryUrlForGroup(item, groupKey) {
@@ -227,7 +289,79 @@ export function applyTitleOverridesToItems(items, titleOverrides = new Map()) {
   return preparedItems;
 }
 
+export async function applyTitleOverridesToItemsCooperatively(
+  items,
+  titleOverrides = new Map(),
+  options = {}
+) {
+  const overrides = titleOverrides instanceof Map
+    ? titleOverrides
+    : new Map(Object.entries(titleOverrides ?? {}));
+  const batchSize = getCooperativeBatchSize(options.batchSize);
+  const yieldControl = options.yieldControl ?? defaultCooperativeYield;
+  const preparedItems = [];
+  const pageBuckets = new Map();
+
+  for (let index = 0; index < items.length; index += 1) {
+    const item = {
+      ...items[index],
+      titleOverrideKey: getHistoryItemTitleOverrideKey(items[index]),
+      isTitleRenamed: false
+    };
+    preparedItems.push(item);
+    const indexes = pageBuckets.get(item.titleOverrideKey) ?? [];
+    indexes.push(index);
+    pageBuckets.set(item.titleOverrideKey, indexes);
+    if ((index + 1) % batchSize === 0) await yieldControl();
+  }
+
+  let processedBucketCount = 0;
+  for (const [pageKey, indexes] of pageBuckets) {
+    const overrideCandidates = collectTitleOverrideCandidates(
+      preparedItems,
+      indexes,
+      overrides,
+      pageKey
+    );
+
+    if (overrideCandidates.length > 0) {
+      const selectedOverride = pickLatestTitleOverride(overrideCandidates);
+      const targetIndex = pickTitleOverrideTargetIndex(
+        preparedItems,
+        indexes,
+        selectedOverride.targetUrl
+      );
+
+      if (targetIndex >= 0) {
+        const item = preparedItems[targetIndex];
+        preparedItems[targetIndex] = {
+          ...item,
+          originalTitle: item?.title ?? '',
+          title: selectedOverride.title,
+          titleOverrideKey: pageKey,
+          titleOverrideKeys: mergeStringValues(
+            [pageKey],
+            overrideCandidates.map((candidate) => candidate.sourceKey)
+          ),
+          isTitleRenamed: true,
+          renameUpdatedAt: selectedOverride.updatedAt
+        };
+      }
+    }
+
+    processedBucketCount += 1;
+    if (processedBucketCount % batchSize === 0) await yieldControl();
+  }
+
+  return preparedItems;
+}
+
 export function applyCapturedTitlesToItems(items, capturedTitles = new Map()) {
+  const context = createCapturedTitleContext(capturedTitles);
+  return items.map((item) => applyCapturedTitleToItem(item, context));
+}
+
+function createCapturedTitleContext(capturedTitles) {
   const titles = capturedTitles instanceof Map
     ? capturedTitles
     : new Map(Object.entries(capturedTitles ?? {}));
@@ -235,51 +369,73 @@ export function applyCapturedTitlesToItems(items, capturedTitles = new Map()) {
 
   for (const [key, value] of titles) {
     const pageKey = getPageIdentityKey(key);
-
     if (pageKey && !titlesByPageIdentity.has(pageKey)) {
       titlesByPageIdentity.set(pageKey, value);
     }
   }
 
-  return items.map((item) => {
-    const titleKey = getHistoryItemCapturedTitleKey(item);
-    const stableResourceKey = getStableResourceIdentityKey(item?.url);
-    const legacyResourceKey = getLegacyResourceIdentityKey(item?.url);
-    const fallbackKeys = mergeStringValues(
-      [stableResourceKey],
-      stableResourceKey === legacyResourceKey ? [legacyResourceKey] : [],
-      [getPageIdentityKey(item?.url)]
-    );
-    const exactCapturedValue = titles.get(titleKey);
-    const capturedValue = exactCapturedValue ??
-      fallbackKeys.map((key) => titles.get(key)).find((value) => value !== undefined) ??
-      titlesByPageIdentity.get(getPageIdentityKey(item?.url));
-    const capturedPage = normalizeCapturedPageValue(capturedValue);
-    const capturedTitle = getUsableOverrideTitle(capturedPage.title);
-    const capturedResolvedUrl = getUsableUrl(capturedPage.resolvedUrl);
-    const resolvedUrl = exactCapturedValue !== undefined ||
-      getPageIdentityKey(capturedResolvedUrl) === getPageIdentityKey(item?.url)
-      ? capturedResolvedUrl
-      : '';
-    const historyTitle = getUsableOverrideTitle(item?.title);
+  return { titles, titlesByPageIdentity };
+}
 
-    if (!capturedTitle) {
-      return {
-        ...item,
-        historyTitle,
-        identityTitle: '',
-        title: ''
-      };
-    }
+function applyCapturedTitleToItem(item, context) {
+  const { titles, titlesByPageIdentity } = context;
+  const titleKey = getHistoryItemCapturedTitleKey(item);
+  const stableResourceKey = getStableResourceIdentityKey(item?.url);
+  const legacyResourceKey = getLegacyResourceIdentityKey(item?.url);
+  const fallbackKeys = mergeStringValues(
+    [stableResourceKey],
+    stableResourceKey === legacyResourceKey ? [legacyResourceKey] : [],
+    [getPageIdentityKey(item?.url)]
+  );
+  const exactCapturedValue = titles.get(titleKey);
+  const capturedValue = exactCapturedValue ??
+    fallbackKeys.map((key) => titles.get(key)).find((value) => value !== undefined) ??
+    titlesByPageIdentity.get(getPageIdentityKey(item?.url));
+  const capturedPage = normalizeCapturedPageValue(capturedValue);
+  const capturedTitle = getUsableOverrideTitle(capturedPage.title);
+  const capturedResolvedUrl = getUsableUrl(capturedPage.resolvedUrl);
+  const resolvedUrl = exactCapturedValue !== undefined ||
+    getPageIdentityKey(capturedResolvedUrl) === getPageIdentityKey(item?.url)
+    ? capturedResolvedUrl
+    : '';
+  const historyTitle = getUsableOverrideTitle(item?.title);
 
+  if (!capturedTitle) {
     return {
       ...item,
       historyTitle,
-      identityTitle: capturedTitle,
-      title: capturedTitle,
-      ...(resolvedUrl ? { dedupeUrl: resolvedUrl, resolvedUrl } : {})
+      identityTitle: '',
+      title: ''
     };
-  });
+  }
+
+  return {
+    ...item,
+    historyTitle,
+    identityTitle: capturedTitle,
+    title: capturedTitle,
+    ...(resolvedUrl ? { dedupeUrl: resolvedUrl, resolvedUrl } : {})
+  };
+}
+
+export async function applyCapturedTitlesToItemsCooperatively(
+  items,
+  capturedTitles = new Map(),
+  options = {}
+) {
+  const batchSize = getCooperativeBatchSize(options.batchSize);
+  const yieldControl = options.yieldControl ?? defaultCooperativeYield;
+  const preparedItems = [];
+  const context = createCapturedTitleContext(capturedTitles);
+
+  for (let start = 0; start < items.length; start += batchSize) {
+    preparedItems.push(...items
+      .slice(start, start + batchSize)
+      .map((item) => applyCapturedTitleToItem(item, context)));
+    await yieldControl();
+  }
+
+  return preparedItems;
 }
 
 export function filterHistoryItemsByQuery(items, query) {
@@ -314,6 +470,19 @@ export function prepareHistoryItemsForSearch(items) {
       normalizedSearchUrls: searchableUrls.map(normalizeSearchText)
     };
   });
+}
+
+export async function prepareHistoryItemsForSearchCooperatively(items, options = {}) {
+  const batchSize = getCooperativeBatchSize(options.batchSize);
+  const yieldControl = options.yieldControl ?? defaultCooperativeYield;
+  const preparedItems = [];
+
+  for (let start = 0; start < items.length; start += batchSize) {
+    preparedItems.push(...prepareHistoryItemsForSearch(items.slice(start, start + batchSize)));
+    await yieldControl();
+  }
+
+  return preparedItems;
 }
 
 function getPreparedSearchValues(item, searchesUrl) {
@@ -521,7 +690,7 @@ function getItemPinKeys(item) {
 
 function getItemSearchableTitles(item) {
   const titles = Array.isArray(item?.searchableTitles) ? item.searchableTitles : [];
-  return mergeStringValues(titles, [item?.title]);
+  return mergeStringValues(titles, [item?.title, item?.historyTitle]);
 }
 
 function getItemSearchableUrls(item) {
@@ -543,6 +712,13 @@ function mergeStringValues(...collections) {
   }
 
   return [...values];
+}
+
+function addStringValues(target, values) {
+  for (const value of values ?? []) {
+    const normalizedValue = String(value ?? '').trim();
+    if (normalizedValue) target.add(normalizedValue);
+  }
 }
 
 function collectTitleOverrideCandidates(items, indexes, overrides, pageKey) {
@@ -776,4 +952,15 @@ function pickPreferredItem(current, candidate) {
     .map((value) => String(value ?? ''))
     .join('\n');
   return candidateRawIdentity.localeCompare(currentRawIdentity) < 0 ? candidate : current;
+}
+
+function getCooperativeBatchSize(value) {
+  const batchSize = Number(value ?? DEFAULT_COOPERATIVE_BATCH_SIZE);
+  return Number.isInteger(batchSize) && batchSize > 0
+    ? batchSize
+    : DEFAULT_COOPERATIVE_BATCH_SIZE;
+}
+
+function defaultCooperativeYield() {
+  return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
 }

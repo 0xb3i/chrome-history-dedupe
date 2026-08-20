@@ -798,16 +798,26 @@ h1 {
   content: "";
 }
 
+.popup-root {
+  width: 580px;
+  min-width: 580px;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .popup-body {
-  width: 620px;
-  min-width: 620px;
-  max-height: 760px;
-  overflow: auto;
+  width: 580px;
+  min-width: 580px;
+  min-height: 0;
+  max-height: 560px;
+  overflow-x: hidden;
+  overflow-y: auto;
   background: var(--bg);
 }
 
 .popup {
   width: 100%;
+  max-width: 100%;
   padding: 14px;
 }
 

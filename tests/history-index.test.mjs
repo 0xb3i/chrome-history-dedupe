@@ -4,7 +4,8 @@ import test from 'node:test';
 import {
   buildHistoryRangeIndexes,
   getHistoryRangeStartTime,
-  HISTORY_INDEX_ALGORITHM_VERSION
+  HISTORY_INDEX_ALGORITHM_VERSION,
+  HISTORY_INDEX_RANGES
 } from '../src/history-index/derive.js';
 import { createHistoryIndexService } from '../src/history-index/service.js';
 
@@ -32,6 +33,53 @@ test('range indexes preserve time windows and time-exempt renamed pages', async 
   assert.equal(indexes.get('week').some((item) => item.url === oldPlain.url), false);
   assert.equal(indexes.get('all').length, 3);
   assert.equal(getHistoryRangeStartTime('week', NOW), NOW - 7 * DAY);
+});
+
+test('large index builds yield to shortcut tasks before completing', async () => {
+  const items = Array.from({ length: 5000 }, (_, index) => historyItem(
+    `https://example.com/docs/abc12345?utm_source=${index}`,
+    NOW - index,
+    1
+  ));
+  let buildCompleted = false;
+  const build = buildHistoryRangeIndexes(items, {
+    now: NOW,
+    titleOverrides: new Map(),
+    capturedPageTitles: new Map(),
+    batchSize: 250
+  }).finally(() => {
+    buildCompleted = true;
+  });
+
+  const wasCompletedWhenShortcutTaskRan = await new Promise((resolve) => {
+    setTimeout(() => resolve(buildCompleted), 0);
+  });
+
+  assert.equal(wasCompletedWhenShortcutTaskRan, false);
+  const indexes = await build;
+  assert.equal(indexes.get('all').length, 1);
+  assert.equal(indexes.get('all')[0].dedupeCount, 5000);
+});
+
+test('cooperative index stages checkpoint within a large range', async () => {
+  const items = Array.from({ length: 1200 }, (_, index) => historyItem(
+    `https://example.com/page/${index}`,
+    NOW - index,
+    1
+  ));
+  let yieldCount = 0;
+
+  await buildHistoryRangeIndexes(items, {
+    now: NOW,
+    titleOverrides: new Map(),
+    capturedPageTitles: new Map(),
+    batchSize: 100,
+    yieldControl: async () => {
+      yieldCount += 1;
+    }
+  });
+
+  assert.ok(yieldCount > HISTORY_INDEX_RANGES.length * 5);
 });
 
 test('ready persistent index never queries Chrome history', async () => {
@@ -109,6 +157,48 @@ test('derived title rebuild uses raw persistence and does not query Chrome histo
 
   assert.equal(searchCalls, 0);
   assert.equal((await store.loadRange('week')).pageItems[0].title, '大模型知识面试一本通');
+});
+
+test('derived rebuilds triggered during an active build collapse into one latest trailing build', async () => {
+  const item = historyItem('https://example.com/docs/abc12345', NOW, 2);
+  const store = createMemoryIndexStore([item]);
+  await seedReadyIndex(store);
+  let releaseFirstBuild;
+  let signalFirstBuildStarted;
+  let loadOverrideCalls = 0;
+  let titleOverrides = new Map([[
+    item.url,
+    { title: '首次构建', targetUrl: item.url, updatedAt: NOW }
+  ]]);
+  const firstBuildStarted = new Promise((resolve) => { signalFirstBuildStarted = resolve; });
+  const firstBuildGate = new Promise((resolve) => { releaseFirstBuild = resolve; });
+  const service = createService(store, {
+    loadTitleOverrides: async () => {
+      loadOverrideCalls += 1;
+      const snapshot = titleOverrides;
+      if (loadOverrideCalls === 1) {
+        signalFirstBuildStarted();
+        await firstBuildGate;
+      }
+      return snapshot;
+    }
+  });
+
+  const firstBuild = service.rebuildDerived({ immediate: true });
+  await firstBuildStarted;
+  titleOverrides = new Map([[
+    item.url,
+    { title: '最新命名', targetUrl: item.url, updatedAt: NOW + 1 }
+  ]]);
+  const trailingRequests = Array.from(
+    { length: 100 },
+    () => service.rebuildDerived({ immediate: true })
+  );
+  releaseFirstBuild();
+  await Promise.all([firstBuild, ...trailingRequests]);
+
+  assert.equal(loadOverrideCalls, 2);
+  assert.equal((await store.loadRange('week')).pageItems[0].title, '最新命名');
 });
 
 test('background calibration keeps the committed generation readable until completion', async () => {

@@ -16,6 +16,7 @@ export function createHistoryIndexService(options = {}) {
   const fullSyncMaxAgeMs = Number(options.fullSyncMaxAgeMs ?? DEFAULT_FULL_SYNC_MAX_AGE_MS);
   let operationQueue = Promise.resolve();
   let calibrationPromise = null;
+  let flushLoopPromise = null;
   let flushTimer = null;
   let pendingClear = false;
   let pendingDerivedRebuild = false;
@@ -66,48 +67,87 @@ export function createHistoryIndexService(options = {}) {
     return calibrationPromise;
   };
 
-  const flushPending = () => {
-    if (flushTimer !== null) {
-      globalThis.clearTimeout(flushTimer);
-      flushTimer = null;
-    }
-    const clear = pendingClear;
-    const upserts = [...pendingUpserts.values()];
-    const deletes = [...pendingDeletes];
-    const rebuildDerived = pendingDerivedRebuild;
-    const waiters = pendingWaiters;
+  const hasPendingWork = () => (
+    pendingClear ||
+    pendingUpserts.size > 0 ||
+    pendingDeletes.size > 0 ||
+    pendingDerivedRebuild
+  );
+
+  const takePendingBatch = () => {
+    const batch = {
+      clear: pendingClear,
+      upserts: [...pendingUpserts.values()],
+      deletes: [...pendingDeletes],
+      rebuildDerived: pendingDerivedRebuild,
+      waiters: pendingWaiters
+    };
     pendingClear = false;
     pendingDerivedRebuild = false;
     pendingUpserts.clear();
     pendingDeletes.clear();
     pendingWaiters = [];
+    return batch;
+  };
 
-    if (!clear && upserts.length === 0 && deletes.length === 0 && !rebuildDerived) {
+  const flushPending = () => {
+    if (flushTimer !== null) {
+      globalThis.clearTimeout(flushTimer);
+      flushTimer = null;
+    }
+
+    if (flushLoopPromise) {
+      return flushLoopPromise;
+    }
+
+    if (!hasPendingWork()) {
+      const waiters = pendingWaiters;
+      pendingWaiters = [];
       waiters.forEach(({ resolve }) => resolve(null));
       return Promise.resolve(null);
     }
 
     const result = enqueue(async () => {
-      if (clear || upserts.length > 0 || deletes.length > 0) {
-        await store.applyRawMutation({ clear, upserts, deletes });
+      let lastResult = null;
+      let lastError = null;
+
+      while (hasPendingWork()) {
+        const { clear, upserts, deletes, waiters } = takePendingBatch();
+
+        try {
+          if (clear || upserts.length > 0 || deletes.length > 0) {
+            await store.applyRawMutation({ clear, upserts, deletes });
+          }
+          lastResult = await rebuildFromRaw();
+          lastError = null;
+          waiters.forEach(({ resolve }) => resolve(lastResult));
+        } catch (error) {
+          lastError = error;
+          waiters.forEach(({ reject }) => reject(error));
+        }
       }
-      return rebuildFromRaw();
+
+      if (lastError) throw lastError;
+      return lastResult;
     });
-    result.then(
-      (value) => waiters.forEach(({ resolve }) => resolve(value)),
-      (error) => waiters.forEach(({ reject }) => reject(error))
-    );
-    return result;
+    flushLoopPromise = result.finally(() => {
+      flushLoopPromise = null;
+      if (hasPendingWork()) void flushPending().catch(() => {});
+    });
+    return flushLoopPromise;
   };
 
   const scheduleFlush = (options = {}) => new Promise((resolve, reject) => {
     pendingWaiters.push({ resolve, reject });
     if (options.immediate || eventBatchMs <= 0) {
-      void flushPending();
+      void flushPending().catch(() => {});
       return;
     }
     if (flushTimer !== null) globalThis.clearTimeout(flushTimer);
-    flushTimer = globalThis.setTimeout(() => void flushPending(), eventBatchMs);
+    flushTimer = globalThis.setTimeout(
+      () => void flushPending().catch(() => {}),
+      eventBatchMs
+    );
   });
 
   return {

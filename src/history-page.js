@@ -1,12 +1,15 @@
 import {
   applyPinnedStateToGroups,
   applyPinnedStateToItemsByName,
+  applyTitleOverridesToItems,
   compareDisplayNames,
   filterHistoryItemsByQuery,
   formatHistoryUrlForGroup,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
-  groupHistoryItems
+  groupHistoryItems,
+  groupHistoryItemsByCandidateRank,
+  prioritizeRenamedHistoryItems
 } from './history-utils.js';
 import {
   deleteGroupNameOverride,
@@ -15,18 +18,20 @@ import {
   loadGroupNameOverrides,
   loadLastSearchState,
   loadPinnedUrlKeys,
+  loadTitleOverrides,
+  normalizePageTitleOverrideMap,
   normalizePinnedPageKeys,
   normalizeTitleOverrideMap,
   PINNED_URLS_STORAGE_KEY,
   saveGroupNameOverride,
   saveLastSearchState,
   saveTitleOverride,
+  TITLE_OVERRIDES_STORAGE_KEY,
   togglePinnedUrlKey
 } from './storage.js';
 import { createHistoryIndexStore } from './history-index/store.js';
 import {
   HISTORY_INDEX_ENSURE_MESSAGE,
-  HISTORY_INDEX_REBUILD_MESSAGE,
   HISTORY_INDEX_UPDATED_MESSAGE
 } from './history-index/protocol.js';
 
@@ -50,6 +55,7 @@ let currentGroups = [];
 let currentFlatItems = [];
 let pinnedUrlKeys = new Set();
 let groupNameOverrides = new Map();
+let titleOverrides = new Map();
 let isInitialized = false;
 let renameDialogItem = null;
 let groupRenameDialogGroup = null;
@@ -57,6 +63,7 @@ let showRenamedOnly = false;
 let showMinimalMode = false;
 let latestSearchRequestId = 0;
 let pageItemsSnapshot = [];
+let committedPageItemsSnapshot = [];
 let pageItemsRange = '';
 let hasPageItemsSnapshot = false;
 let searchSnapshot = null;
@@ -100,14 +107,16 @@ function renderRuntimeVersion() {
 
 async function init() {
   try {
-    const [loadedPinnedUrlKeys, loadedGroupNameOverrides, lastSearchState] =
+    const [loadedPinnedUrlKeys, loadedGroupNameOverrides, loadedTitleOverrides, lastSearchState] =
       await Promise.all([
         loadPinnedUrlKeys(),
         loadGroupNameOverrides(),
+        loadTitleOverrides(),
         loadLastSearchState()
       ]);
     pinnedUrlKeys = loadedPinnedUrlKeys;
     groupNameOverrides = loadedGroupNameOverrides;
+    titleOverrides = loadedTitleOverrides;
     applyLastSearchState(lastSearchState);
     selectQueryInputOnPopupOpen();
     isInitialized = true;
@@ -164,12 +173,26 @@ async function loadRangeIndexWithBackgroundEnsure(range, options = {}) {
 }
 
 function applyLoadedRangeIndex(index, range, query = queryInput.value) {
-  pageItemsSnapshot = index.pageItems;
+  committedPageItemsSnapshot = index.pageItems;
+  pageItemsSnapshot = applyLatestTitleOverrides(committedPageItemsSnapshot);
   pageItemsRange = range;
   hasPageItemsSnapshot = true;
   loadedIndexRevision = Number(index.revision ?? loadedIndexRevision);
   searchSnapshot = createSearchSnapshotFromPageItems(pageItemsSnapshot, query);
   renderHistorySnapshot();
+}
+
+function applyLatestTitleOverrides(items) {
+  const baseItems = items.map((item) => {
+    if (!item?.isTitleRenamed) return item;
+    const { renameUpdatedAt: _renameUpdatedAt, ...baseItem } = item;
+    return {
+      ...baseItem,
+      title: item.originalTitle || item.url || '',
+      isTitleRenamed: false
+    };
+  });
+  return applyTitleOverridesToItems(baseItems, titleOverrides);
 }
 
 function renderHistorySnapshot() {
@@ -184,7 +207,13 @@ function renderHistorySnapshot() {
   const visibleItems = showRenamedOnly
     ? matchedItems.filter((item) => item.isTitleRenamed)
     : matchedItems;
-  const groupedItems = applyGroupNameOverridesToGroups(groupHistoryItems(visibleItems, 'domain'));
+  const rankedItems = query ? prioritizeRenamedHistoryItems(visibleItems) : visibleItems;
+  const baseGroups = query
+    ? groupHistoryItemsByCandidateRank(rankedItems, 'domain')
+    : groupHistoryItems(rankedItems, 'domain');
+  const groupedItems = applyGroupNameOverridesToGroups(baseGroups, {
+    preserveOrder: Boolean(query)
+  });
 
   currentGroups = showRenamedOnly ? [] : groupedItems;
   currentFlatItems = showRenamedOnly ? sortItemsByDisplayName(visibleItems) : [];
@@ -932,7 +961,6 @@ async function saveRenameDialogTitle() {
     await saveTitleOverride(getRenameDialogTitleOverrideKey(), normalizedTitle, {
       targetUrl: renameDialogItem.url
     });
-    await refreshDerivedHistoryIndex();
     closeRenameDialog();
   } catch (error) {
     renameDialog.status.textContent = error.message || '保存失败。';
@@ -949,7 +977,6 @@ async function restoreRenameDialogOriginalTitle() {
 
   try {
     await deleteTitleOverrides(getRenameDialogTitleOverrideKeys());
-    await refreshDerivedHistoryIndex();
     closeRenameDialog();
   } catch (error) {
     renameDialog.status.textContent = error.message || '还原失败。';
@@ -1030,7 +1057,7 @@ function closeGroupRenameDialog() {
   closeDialogElement(groupRenameDialog.element);
 }
 
-function applyGroupNameOverridesToGroups(groups) {
+function applyGroupNameOverridesToGroups(groups, options = {}) {
   return groups
     .map((group, index) => {
       const overrideLabel = groupNameOverrides.get(group.key);
@@ -1053,6 +1080,10 @@ function applyGroupNameOverridesToGroups(groups) {
       };
     })
     .sort((left, right) => {
+      if (options.preserveOrder) {
+        return left.originalIndex - right.originalIndex;
+      }
+
       const byRename = Number(right.isGroupRenamed) - Number(left.isGroupRenamed);
       const byName = compareDisplayNames(getGroupDisplayName(left), getGroupDisplayName(right));
       return byRename || byName || left.originalIndex - right.originalIndex;
@@ -1149,6 +1180,15 @@ function addStorageChangeListener() {
       );
       scheduleSnapshotRender();
     }
+
+    if (changes[TITLE_OVERRIDES_STORAGE_KEY]) {
+      titleOverrides = normalizePageTitleOverrideMap(
+        changes[TITLE_OVERRIDES_STORAGE_KEY].newValue
+      );
+      pageItemsSnapshot = applyLatestTitleOverrides(committedPageItemsSnapshot);
+      searchSnapshot = createSearchSnapshotFromPageItems(pageItemsSnapshot, queryInput.value);
+      scheduleSnapshotRender();
+    }
   });
 }
 
@@ -1164,12 +1204,6 @@ function addHistoryIndexUpdateListener() {
     void reloadCurrentRangeIndex();
     return false;
   });
-}
-
-async function refreshDerivedHistoryIndex() {
-  const response = await requestHistoryIndex(HISTORY_INDEX_REBUILD_MESSAGE);
-  if (!response?.ok) throw new Error(response?.error || '索引更新失败。');
-  await reloadCurrentRangeIndex();
 }
 
 async function reloadCurrentRangeIndex() {

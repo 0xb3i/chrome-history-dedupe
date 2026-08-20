@@ -13,7 +13,10 @@ import {
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
   groupHistoryItems,
-  normalizeHistoryKey
+  groupHistoryItemsByCandidateRank,
+  normalizeHistoryKey,
+  prepareHistoryItemsForSearch,
+  prioritizeRenamedHistoryItems
 } from '../src/history-utils.js';
 
 test('normalized URL mode collapses repeat visits and keeps the latest item', () => {
@@ -374,7 +377,7 @@ test('page family mode keeps only the latest rename after query variants merge',
   assert.equal(result.totalVisitCount, 21);
 });
 
-test('stale history titles never affect display search or cross-URL dedupe', () => {
+test('history titles remain search-only aliases without affecting display or cross-URL dedupe', () => {
   const items = applyCapturedTitlesToItems([
     { id: 'a', title: 'Docs', url: 'https://example.com/doc/abc12345' },
     { id: 'b', title: 'Docs', url: 'https://example.com/doc/xyz98765' }
@@ -382,8 +385,22 @@ test('stale history titles never affect display search or cross-URL dedupe', () 
 
   assert.equal(items[0].title, '');
   assert.equal(items[1].title, '');
-  assert.equal(filterHistoryItemsByQuery(items, 'Docs').length, 0);
+  assert.equal(filterHistoryItemsByQuery(items, 'Docs').length, 2);
   assert.equal(dedupeHistoryItems(items, 'page-title').length, 2);
+});
+
+test('a Lark history title is searchable when live title capture is missing', () => {
+  const url = 'https://bytedance.larkoffice.com/wiki/VLn7wplvtiWnFPkZWpOc4Lz5nwg';
+  const [item] = prepareHistoryItemsForSearch(applyCapturedTitlesToItems([
+    { title: '评估分析v2', url }
+  ]));
+
+  assert.equal(item.title, '');
+  assert.deepEqual(item.normalizedSearchTitles, ['评估分析v2']);
+  assert.deepEqual(
+    filterHistoryItemsByQuery([item], '评估').map((result) => result.url),
+    [url]
+  );
 });
 
 test('page title mode falls back to normalized URL when title is empty', () => {
@@ -1099,6 +1116,39 @@ test('domain groups prefer item totalVisitCount when summing group frequency', (
     ['a.example', 'b.example']
   );
   assert.equal(groups[0].totalVisitCount, 7);
+});
+
+test('keyword search ranks renamed tab candidates before grouping without disturbing either tier', () => {
+  const items = applyTitleOverridesToItems(
+    [
+      { id: 'plain-first', title: 'AB Guide', url: 'https://a.example/guide', lastVisitTime: 500 },
+      { id: 'renamed-first', title: 'AB Notes', url: 'https://b.example/notes', lastVisitTime: 400 },
+      { id: 'renamed-second', title: 'AB Docs', url: 'https://c.example/docs', lastVisitTime: 300 },
+      { id: 'plain-second', title: 'AB Home', url: 'https://d.example/home', lastVisitTime: 200 }
+    ],
+    new Map([
+      ['https://b.example/notes', 'AB Renamed Notes'],
+      ['https://c.example/docs', 'AB Renamed Docs']
+    ])
+  );
+
+  assert.deepEqual(
+    prioritizeRenamedHistoryItems(items).map((item) => item.id),
+    ['renamed-first', 'renamed-second', 'plain-first', 'plain-second']
+  );
+});
+
+test('candidate-ranked grouping follows the best matching tab instead of group traffic', () => {
+  const groups = groupHistoryItemsByCandidateRank([
+    { id: 'top-tab', url: 'https://small.example/top', lastVisitTime: 500, visitCount: 1 },
+    { id: 'busy-newer', url: 'https://busy.example/newer', lastVisitTime: 400, visitCount: 100 },
+    { id: 'small-second', url: 'https://small.example/second', lastVisitTime: 300, visitCount: 1 },
+    { id: 'busy-older', url: 'https://busy.example/older', lastVisitTime: 200, visitCount: 100 }
+  ]);
+
+  assert.deepEqual(groups.map((group) => group.key), ['small.example', 'busy.example']);
+  assert.deepEqual(groups[0].items.map((item) => item.id), ['top-tab', 'small-second']);
+  assert.equal(groups[1].totalVisitCount, 200);
 });
 
 test('local file URLs use a visible stable group instead of an empty hostname', () => {
