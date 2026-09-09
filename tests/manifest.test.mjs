@@ -7,7 +7,7 @@ const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.me
 
 test('manifest and package expose the same user-visible version', () => {
   assert.equal(manifest.version, packageJson.version);
-  assert.equal(manifest.version, '0.6.10');
+  assert.equal(manifest.version, '0.9.0');
 });
 
 test('browser action opens the popup page', () => {

@@ -3,79 +3,82 @@ import test from 'node:test';
 
 import { createNavigationTracker } from '../src/navigation-tracker.js';
 
-test('navigation tracker keeps redirect aliases until the final page completes', () => {
+const original = 'https://example.com/legacy';
+const final = 'https://example.com/final';
+const event = (url, timeStamp, extra = {}) => ({ tabId: 7, frameId: 0, url, timeStamp, ...extra });
+
+test('only a committed server redirect establishes aliases', () => {
   const tracker = createNavigationTracker();
-
-  tracker.update(7, { status: 'loading', url: 'https://example.com/legacy' }, {
-    pendingUrl: 'https://example.com/legacy',
-    url: 'https://example.com/legacy'
-  });
-  tracker.update(7, { url: 'https://example.com/final' }, {
-    pendingUrl: 'https://example.com/final',
-    url: 'https://example.com/final'
-  });
-  const urls = tracker.update(7, { status: 'complete' }, {
-    url: 'https://example.com/final'
-  });
-
-  assert.deepEqual(urls, [
-    'https://example.com/legacy',
-    'https://example.com/final'
-  ]);
+  tracker.beforeNavigate(event(original, 1));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: original }), []);
+  tracker.committed(event(final, 2, { transitionQualifiers: ['server_redirect'] }));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [original, final]);
 });
 
-test('a later SPA URL update starts a fresh chain instead of becoming a redirect alias', () => {
+test('URL changes during loading and client redirects do not establish aliases', () => {
   const tracker = createNavigationTracker();
-
-  tracker.update(1, { status: 'loading', url: 'https://example.com/a' }, {
-    url: 'https://example.com/a'
-  });
-  tracker.update(1, { status: 'complete' }, { url: 'https://example.com/a' });
-
-  assert.deepEqual(
-    tracker.update(1, { url: 'https://example.com/b' }, { url: 'https://example.com/b' }),
-    ['https://example.com/b']
-  );
+  tracker.beforeNavigate(event(original, 1));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final, status: 'loading' }), []);
+  tracker.committed(event(final, 2, { transitionQualifiers: ['client_redirect'] }));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [final]);
 });
 
-test('a new navigation never records the previously loaded tab URL as an alias', () => {
+test('canceling A and navigating to B cannot copy the B title onto A', () => {
   const tracker = createNavigationTracker();
-  tracker.update(3, { status: 'complete' }, { url: 'https://example.com/old' });
-
-  const loadingUrls = tracker.update(3, { status: 'loading' }, {
-    pendingUrl: 'https://example.com/new',
-    url: 'https://example.com/old'
-  });
-  const completedUrls = tracker.update(3, { status: 'complete' }, {
-    url: 'https://example.com/new'
-  });
-
-  assert.deepEqual(loadingUrls, ['https://example.com/new']);
-  assert.deepEqual(completedUrls, ['https://example.com/new']);
+  tracker.beforeNavigate(event(original, 1));
+  tracker.beforeNavigate(event(final, 2));
+  tracker.errorOccurred(event(original, 3, { error: 'net::ERR_ABORTED' }));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), []);
+  tracker.committed(event(final, 4));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [final]);
 });
 
-test('a pending URL starts a fresh chain even if the worker first sees only a title event', () => {
+test('an overlapping navigation with ambiguous attribution does not create redirect aliases', () => {
   const tracker = createNavigationTracker();
-
-  assert.deepEqual(
-    tracker.update(4, { title: 'New page loading' }, {
-      pendingUrl: 'https://example.com/new',
-      status: 'loading',
-      url: 'https://example.com/old'
-    }),
-    ['https://example.com/new']
-  );
+  tracker.beforeNavigate(event(original, 1));
+  tracker.beforeNavigate(event('https://example.com/replacement', 2));
+  tracker.committed(event(final, 3, { transitionQualifiers: ['server_redirect'] }));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [final]);
 });
 
-test('removed tabs discard their previous navigation chain', () => {
+test('SPA routes discard committed redirect aliases even when returning to the original route', () => {
   const tracker = createNavigationTracker();
-  tracker.update(2, { status: 'loading', url: 'https://example.com/old' }, {
-    url: 'https://example.com/old'
-  });
-  tracker.remove(2);
+  tracker.beforeNavigate(event(original, 1));
+  tracker.committed(event(final, 2, { transitionQualifiers: ['server_redirect'] }));
+  const spa = 'https://example.com/another-resource';
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: spa }), [spa]);
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [final]);
+});
 
-  assert.deepEqual(
-    tracker.update(2, {}, { url: 'https://example.com/current' }),
-    ['https://example.com/current']
-  );
+test('a pending URL cannot capture the previously loaded tab title, including after a worker restart', () => {
+  const tracker = createNavigationTracker();
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: original, pendingUrl: final }), []);
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [final]);
+});
+
+test('subframe and stale navigation events cannot replace main-frame aliases', () => {
+  const tracker = createNavigationTracker();
+  tracker.beforeNavigate(event(original, 10));
+  tracker.committed(event(final, 20, { transitionQualifiers: ['server_redirect'] }));
+  tracker.beforeNavigate(event('https://example.com/frame', 30, { frameId: 2 }));
+  tracker.committed(event(original, 5));
+  tracker.errorOccurred(event(original, 6));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [original, final]);
+});
+
+test('failed navigation and removed tabs discard pending state', () => {
+  const tracker = createNavigationTracker();
+  tracker.beforeNavigate(event(original, 1));
+  tracker.errorOccurred(event(original, 2, { error: 'net::ERR_ABORTED' }));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [final]);
+  tracker.beforeNavigate(event(original, 3));
+  tracker.remove(7);
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [final]);
+});
+
+test('a commit after a worker restart captures the final page without inventing aliases', () => {
+  const tracker = createNavigationTracker();
+  tracker.committed(event(final, 2, { transitionQualifiers: ['server_redirect'] }));
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: final }), [final]);
+  assert.deepEqual(tracker.getCaptureUrls(7, { url: 'chrome://history' }), []);
 });

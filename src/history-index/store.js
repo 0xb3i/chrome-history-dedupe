@@ -11,15 +11,38 @@ const INDEX_CHUNKS_STORE = 'index-chunks';
 const INDEX_CHUNK_SIZE = 250;
 const INDEX_WRITE_BATCH_SIZE = 20;
 const STATE_KEY = 'state';
+const GENERATION_WRITE_LOCK = `${DATABASE_NAME}:generation-write`;
 
 export function createHistoryIndexStore(options = {}) {
   const indexedDBApi = options.indexedDBApi ?? globalThis.indexedDB;
   const keyRangeApi = options.keyRangeApi ?? globalThis.IDBKeyRange;
+  const locksApi = options.locksApi ?? globalThis.navigator?.locks;
+  const yieldBetweenWrites = options.yieldControl ?? yieldControl;
   let databasePromise;
+
+  const withGenerationLock = (callback, options = {}) => {
+    if (!locksApi?.request) {
+      return Promise.reject(new Error('Web Locks unavailable for history index writes'));
+    }
+    return locksApi.request(GENERATION_WRITE_LOCK, { mode: 'exclusive', ...options }, callback);
+  };
 
   const getDatabase = () => {
     if (!databasePromise) {
-      databasePromise = openDatabase(indexedDBApi).catch((error) => {
+      databasePromise = openDatabase(indexedDBApi).then(async (database) => {
+        try {
+          // A popup must not wait for an in-progress background build. Only
+          // collect abandoned generations while no writer owns the lifecycle.
+          await withGenerationLock(
+            (lock) => lock ? deleteInactiveGenerations(database) : undefined,
+            { ifAvailable: true }
+          );
+          return database;
+        } catch (error) {
+          database.close();
+          throw error;
+        }
+      }).catch((error) => {
         databasePromise = undefined;
         throw error;
       });
@@ -90,25 +113,42 @@ export function createHistoryIndexStore(options = {}) {
         }));
       }
 
-      await writeGenerationRecords(database, records);
-      const result = await activateGeneration(
-        database,
-        generation,
-        chunksByRange,
-        Number(expectedRawRevision),
-        builtAt
-      );
+      return withGenerationLock(async () => {
+        // Web Locks are released when a worker dies, unlike persistent leases.
+        // Holding the same lock during collection and every write batch makes
+        // it safe to remove incomplete generations left by a terminated worker.
+        await deleteInactiveGenerations(database);
+        let result;
+        try {
+          await writeGenerationRecords(database, records, yieldBetweenWrites);
+          result = await activateGeneration(
+            database,
+            generation,
+            chunksByRange,
+            Number(expectedRawRevision),
+            builtAt
+          );
+        } catch (error) {
+          try {
+            await deleteGeneration(database, keyRangeApi, generation);
+          } catch (cleanupError) {
+            throw new AggregateError([error, cleanupError], 'History index write and cleanup failed');
+          }
+          throw error;
+        }
 
-      if (!result) {
-        void deleteGeneration(database, keyRangeApi, generation).catch(() => {});
-        return null;
-      }
+        if (!result) {
+          await deleteGeneration(database, keyRangeApi, generation);
+          return null;
+        }
 
-      if (result?.previousGeneration && result.previousGeneration !== generation) {
-        void deleteGeneration(database, keyRangeApi, result.previousGeneration).catch(() => {});
-      }
-
-      return result;
+        if (result.previousGeneration && result.previousGeneration !== generation) {
+          // Publication has succeeded; cleanup failure must not hide that fact.
+          // Initialization and the next writer will retry abandoned data cleanup.
+          await deleteGeneration(database, keyRangeApi, result.previousGeneration).catch(() => {});
+        }
+        return result;
+      });
     }
   };
 }
@@ -169,7 +209,7 @@ function mutateRawItems(database, mutation) {
   });
 }
 
-async function writeGenerationRecords(database, records) {
+async function writeGenerationRecords(database, records, yieldBetweenWrites) {
   for (let start = 0; start < records.length; start += INDEX_WRITE_BATCH_SIZE) {
     const transaction = database.transaction(INDEX_CHUNKS_STORE, 'readwrite');
     const store = transaction.objectStore(INDEX_CHUNKS_STORE);
@@ -177,8 +217,29 @@ async function writeGenerationRecords(database, records) {
       store.put(record);
     }
     await transactionResult(transaction, 'History index chunk write failed');
-    await yieldControl();
+    await yieldBetweenWrites();
   }
+}
+
+function deleteInactiveGenerations(database) {
+  return new Promise((resolve, reject) => {
+    const transaction = database.transaction([META_STORE, INDEX_CHUNKS_STORE], 'readwrite');
+    const stateRequest = transaction.objectStore(META_STORE).get(STATE_KEY);
+    stateRequest.onsuccess = () => {
+      const activeGeneration = normalizeState(stateRequest.result).activeGeneration;
+      const store = transaction.objectStore(INDEX_CHUNKS_STORE);
+      const request = store.index('by-generation-range').openKeyCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        if (cursor.key[0] !== activeGeneration) store.delete(cursor.primaryKey);
+        cursor.continue();
+      };
+    };
+    transaction.oncomplete = () => resolve();
+    transaction.onerror = () => reject(transaction.error ?? new Error('History index cleanup failed'));
+    transaction.onabort = () => reject(transaction.error ?? new Error('History index cleanup aborted'));
+  });
 }
 
 function activateGeneration(database, generation, chunksByRange, expectedRawRevision, builtAt) {
@@ -303,7 +364,7 @@ function normalizeUrls(urls) {
 }
 
 function normalizeRange(range) {
-  return HISTORY_INDEX_RANGES.includes(range) ? range : 'month';
+  return HISTORY_INDEX_RANGES.includes(range) ? range : 'all';
 }
 
 function chunkItems(items, chunkSize) {

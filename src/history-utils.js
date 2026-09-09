@@ -1,41 +1,27 @@
 import {
-  getLegacyResourceIdentityKey,
   getPageIdentityKey,
-  getStableResourceIdentityKey,
   normalizeUrlKey
 } from './page-identity.js';
 
 const DEFAULT_MODE = 'normalized-url';
 const LOCAL_FILE_GROUP_KEY = '本地文件';
-const DISPLAY_NAME_COLLATOR = new Intl.Collator('zh-CN', {
-  numeric: true,
-  sensitivity: 'base'
-});
 const HAN_KEYWORD_PATTERN = /^\p{Script=Han}{3,}$/u;
 const MAX_HAN_SUBSEQUENCE_SKIPS = 4;
 const DEFAULT_COOPERATIVE_BATCH_SIZE = 1000;
+const HISTORY_RANGE_DAYS = { day: 1, week: 7, month: 30, quarter: 90, all: 0 };
+
+export function normalizeSearchRange(range) {
+  return Object.hasOwn(HISTORY_RANGE_DAYS, range) ? range : 'all';
+}
+
+export function getHistoryRangeStartTime(range, now = Date.now()) {
+  const days = HISTORY_RANGE_DAYS[normalizeSearchRange(range)];
+  return days ? now - days * 24 * 60 * 60 * 1000 : 0;
+}
+
 export function normalizeHistoryKey(item, mode = DEFAULT_MODE) {
   const rawUrl = String(item?.dedupeUrl || item?.url || '');
-
-  if (mode === 'page-family' || mode === 'page-title' || mode === 'minimal-service') {
-    return getPageIdentityKey(rawUrl);
-  }
-
-  if (mode === 'exact-url') {
-    return rawUrl;
-  }
-
-  try {
-    const url = new URL(rawUrl);
-
-    if (mode === 'domain') {
-      return url.hostname.toLowerCase();
-    }
-
-    return normalizeUrlKey(rawUrl);
-  } catch {
-    return rawUrl;
-  }
+  return mode === 'page-family' ? getPageIdentityKey(rawUrl) : normalizeUrlKey(rawUrl);
 }
 
 export function dedupeHistoryItems(items, mode = DEFAULT_MODE) {
@@ -76,7 +62,6 @@ function addHistoryItemToDedupeBuckets(buckets, item, mode) {
       representativeLastVisitTime: getRepresentativeVisitTime(item),
       representativeVisitCount: getRepresentativeVisitCount(item),
       searchableTitles: new Set(getItemSearchableTitles(item)),
-      searchableUrls: new Set(getItemSearchableUrls(item)),
       titleOverrideKeys: new Set(getItemTitleOverrideKeys(item)),
       totalVisitCount: getTotalVisitCount(item)
     });
@@ -89,7 +74,7 @@ function addHistoryItemToDedupeBuckets(buckets, item, mode) {
     representativeVisitCount: accumulator.representativeVisitCount,
     totalVisitCount: accumulator.totalVisitCount
   };
-  const preferred = pickPreferredItem(current, item, mode);
+  const preferred = pickPreferredItem(current, item);
   const isNormalizedUrlBucket = mode === 'normalized-url';
   if (preferred !== current) accumulator.preferred = preferred;
   accumulator.dedupeCount += getDedupeCount(item);
@@ -102,7 +87,6 @@ function addHistoryItemToDedupeBuckets(buckets, item, mode) {
     ? accumulator.representativeVisitCount + getRepresentativeVisitCount(item)
     : getRepresentativeVisitCount(preferred);
   addStringValues(accumulator.searchableTitles, getItemSearchableTitles(item));
-  addStringValues(accumulator.searchableUrls, getItemSearchableUrls(item));
   addStringValues(accumulator.titleOverrideKeys, getItemTitleOverrideKeys(item));
   accumulator.totalVisitCount += getTotalVisitCount(item);
 }
@@ -118,44 +102,34 @@ function finalizeDedupeBuckets(buckets) {
       representativeLastVisitTime: accumulator.representativeLastVisitTime,
       representativeVisitCount: accumulator.representativeVisitCount,
       searchableTitles: [...accumulator.searchableTitles],
-      searchableUrls: [...accumulator.searchableUrls],
       titleOverrideKeys: [...accumulator.titleOverrideKeys],
       totalVisitCount: accumulator.totalVisitCount
     }
   )).sort((left, right) => {
-    return compareHistoryItemsByCandidateRank(left, right);
+    return compareHistoryItems(left, right);
   });
 }
 
-export function groupHistoryItems(items, mode = 'domain') {
-  return collectHistoryGroups(items, mode)
-    .map((group) => ({
-      ...group,
-      items: [...group.items].sort(compareHistoryItemsWithinGroup)
-    }))
-    .sort((left, right) => {
-      const byCount = right.totalVisitCount - left.totalVisitCount;
-      if (byCount) {
-        return byCount;
-      }
-
-      const byTime = right.lastVisitTime - left.lastVisitTime;
-      return byTime || left.key.localeCompare(right.key);
-    });
+export function groupHistoryItems(items) {
+  return sortHistoryGroups(collectHistoryGroups(items));
 }
 
-export function groupHistoryItemsByCandidateRank(items, mode = 'domain') {
-  return collectHistoryGroups(items, mode).map((group) => ({
+// All presentations use the same item order, and a group's best member decides
+// its rank. Aggregate group traffic remains metadata, never a second ranking rule.
+function sortHistoryGroups(groups) {
+  return groups.map((group) => ({
     ...group,
-    items: [...group.items].sort(compareHistoryItemsWithinGroup)
-  }));
+    items: [...group.items].sort(compareHistoryItems)
+  })).sort((left, right) => (
+    compareHistoryItems(left.items[0], right.items[0]) || left.key.localeCompare(right.key)
+  ));
 }
 
-function collectHistoryGroups(items, mode) {
+function collectHistoryGroups(items) {
   const buckets = new Map();
 
   for (const item of items) {
-    const key = getGroupKey(item, mode);
+    const key = getGroupKey(item);
     const current = buckets.get(key);
 
     if (!current) {
@@ -165,7 +139,7 @@ function collectHistoryGroups(items, mode) {
         items: [item],
         itemCount: 1,
         lastVisitTime: getVisitTime(item),
-        totalVisitCount: getGroupVisitCount(item)
+        totalVisitCount: getTotalVisitCount(item)
       });
       continue;
     }
@@ -173,7 +147,7 @@ function collectHistoryGroups(items, mode) {
     current.items.push(item);
     current.itemCount += 1;
     current.lastVisitTime = Math.max(current.lastVisitTime, getVisitTime(item));
-    current.totalVisitCount += getGroupVisitCount(item);
+    current.totalVisitCount += getTotalVisitCount(item);
   }
 
   return [...buckets.values()];
@@ -216,131 +190,6 @@ export function getHistoryItemCapturedTitleKey(item) {
   return normalizeUrlKey(String(item?.url ?? ''));
 }
 
-export function applyTitleOverridesToItems(items, titleOverrides = new Map()) {
-  const overrides = titleOverrides instanceof Map
-    ? titleOverrides
-    : new Map(Object.entries(titleOverrides ?? {}));
-  const preparedItems = items.map((item) => ({
-    ...item,
-    titleOverrideKey: getHistoryItemTitleOverrideKey(item),
-    isTitleRenamed: false
-  }));
-  const pageBuckets = new Map();
-
-  preparedItems.forEach((item, index) => {
-    const indexes = pageBuckets.get(item.titleOverrideKey) ?? [];
-    indexes.push(index);
-    pageBuckets.set(item.titleOverrideKey, indexes);
-  });
-
-  for (const [pageKey, indexes] of pageBuckets) {
-    const overrideCandidates = collectTitleOverrideCandidates(
-      preparedItems,
-      indexes,
-      overrides,
-      pageKey
-    );
-
-    if (overrideCandidates.length === 0) {
-      continue;
-    }
-
-    const selectedOverride = pickLatestTitleOverride(overrideCandidates);
-    const targetIndex = pickTitleOverrideTargetIndex(
-      preparedItems,
-      indexes,
-      selectedOverride.targetUrl
-    );
-
-    if (targetIndex < 0) {
-      continue;
-    }
-
-    const item = preparedItems[targetIndex];
-    preparedItems[targetIndex] = {
-      ...item,
-      originalTitle: item?.title ?? '',
-      title: selectedOverride.title,
-      titleOverrideKey: pageKey,
-      titleOverrideKeys: mergeStringValues(
-        [pageKey],
-        overrideCandidates.map((candidate) => candidate.sourceKey)
-      ),
-      isTitleRenamed: true,
-      renameUpdatedAt: selectedOverride.updatedAt
-    };
-  }
-
-  return preparedItems;
-}
-
-export async function applyTitleOverridesToItemsCooperatively(
-  items,
-  titleOverrides = new Map(),
-  options = {}
-) {
-  const overrides = titleOverrides instanceof Map
-    ? titleOverrides
-    : new Map(Object.entries(titleOverrides ?? {}));
-  const batchSize = getCooperativeBatchSize(options.batchSize);
-  const yieldControl = options.yieldControl ?? defaultCooperativeYield;
-  const preparedItems = [];
-  const pageBuckets = new Map();
-
-  for (let index = 0; index < items.length; index += 1) {
-    const item = {
-      ...items[index],
-      titleOverrideKey: getHistoryItemTitleOverrideKey(items[index]),
-      isTitleRenamed: false
-    };
-    preparedItems.push(item);
-    const indexes = pageBuckets.get(item.titleOverrideKey) ?? [];
-    indexes.push(index);
-    pageBuckets.set(item.titleOverrideKey, indexes);
-    if ((index + 1) % batchSize === 0) await yieldControl();
-  }
-
-  let processedBucketCount = 0;
-  for (const [pageKey, indexes] of pageBuckets) {
-    const overrideCandidates = collectTitleOverrideCandidates(
-      preparedItems,
-      indexes,
-      overrides,
-      pageKey
-    );
-
-    if (overrideCandidates.length > 0) {
-      const selectedOverride = pickLatestTitleOverride(overrideCandidates);
-      const targetIndex = pickTitleOverrideTargetIndex(
-        preparedItems,
-        indexes,
-        selectedOverride.targetUrl
-      );
-
-      if (targetIndex >= 0) {
-        const item = preparedItems[targetIndex];
-        preparedItems[targetIndex] = {
-          ...item,
-          originalTitle: item?.title ?? '',
-          title: selectedOverride.title,
-          titleOverrideKey: pageKey,
-          titleOverrideKeys: mergeStringValues(
-            [pageKey],
-            overrideCandidates.map((candidate) => candidate.sourceKey)
-          ),
-          isTitleRenamed: true,
-          renameUpdatedAt: selectedOverride.updatedAt
-        };
-      }
-    }
-
-    processedBucketCount += 1;
-    if (processedBucketCount % batchSize === 0) await yieldControl();
-  }
-
-  return preparedItems;
-}
-
 export function applyCapturedTitlesToItems(items, capturedTitles = new Map()) {
   const context = createCapturedTitleContext(capturedTitles);
   return items.map((item) => applyCapturedTitleToItem(item, context));
@@ -365,16 +214,8 @@ function createCapturedTitleContext(capturedTitles) {
 function applyCapturedTitleToItem(item, context) {
   const { titles, titlesByPageIdentity } = context;
   const titleKey = getHistoryItemCapturedTitleKey(item);
-  const stableResourceKey = getStableResourceIdentityKey(item?.url);
-  const legacyResourceKey = getLegacyResourceIdentityKey(item?.url);
-  const fallbackKeys = mergeStringValues(
-    [stableResourceKey],
-    stableResourceKey === legacyResourceKey ? [legacyResourceKey] : [],
-    [getPageIdentityKey(item?.url)]
-  );
   const exactCapturedValue = titles.get(titleKey);
   const capturedValue = exactCapturedValue ??
-    fallbackKeys.map((key) => titles.get(key)).find((value) => value !== undefined) ??
     titlesByPageIdentity.get(getPageIdentityKey(item?.url));
   const capturedPage = normalizeCapturedPageValue(capturedValue);
   const capturedTitle = getUsableOverrideTitle(capturedPage.title);
@@ -389,7 +230,6 @@ function applyCapturedTitleToItem(item, context) {
     return {
       ...item,
       historyTitle,
-      identityTitle: '',
       title: ''
     };
   }
@@ -397,7 +237,6 @@ function applyCapturedTitleToItem(item, context) {
   return {
     ...item,
     historyTitle,
-    identityTitle: capturedTitle,
     title: capturedTitle,
     ...(resolvedUrl ? { dedupeUrl: resolvedUrl, resolvedUrl } : {})
   };
@@ -450,19 +289,6 @@ export function prepareHistoryItemsForSearch(items) {
   }));
 }
 
-export async function prepareHistoryItemsForSearchCooperatively(items, options = {}) {
-  const batchSize = getCooperativeBatchSize(options.batchSize);
-  const yieldControl = options.yieldControl ?? defaultCooperativeYield;
-  const preparedItems = [];
-
-  for (let start = 0; start < items.length; start += batchSize) {
-    preparedItems.push(...prepareHistoryItemsForSearch(items.slice(start, start + batchSize)));
-    await yieldControl();
-  }
-
-  return preparedItems;
-}
-
 function getPreparedSearchTitles(item) {
   return Array.isArray(item?.normalizedSearchTitles)
     ? item.normalizedSearchTitles
@@ -501,102 +327,24 @@ function matchesBoundedHanSubsequence(value, keyword) {
 
 export function applyPinnedStateToGroups(groups, pinnedKeys = new Set()) {
   const pinOrders = createPinOrders(pinnedKeys);
-
-  return groups.map((group, originalGroupIndex) => {
-    const itemsWithPinState = group.items.map((item, index) => {
+  return sortHistoryGroups(groups.map((group) => {
+    const items = group.items.map((item) => {
       const pinKeys = getItemPinKeys(item);
       const activePinKeys = pinKeys.filter((key) => pinOrders.has(key));
       const pinOrder = activePinKeys.length > 0
         ? Math.min(...activePinKeys.map((key) => pinOrders.get(key)))
         : undefined;
-
       return {
         ...item,
         pinKey: getHistoryItemPinKey(item) || pinKeys[0],
         pinKeys,
         activePinKeys,
         isPinned: pinOrder !== undefined,
-        pinOrder,
-        originalIndex: index
+        pinOrder
       };
     });
-
-    const items = itemsWithPinState
-      .sort((left, right) => {
-        const byPin = Number(right.isPinned) - Number(left.isPinned);
-        const byPinOrder = (left.pinOrder ?? Infinity) - (right.pinOrder ?? Infinity);
-        return byPin || byPinOrder || left.originalIndex - right.originalIndex;
-      })
-      .map((item) => {
-        const { originalIndex, pinOrder, ...publicItem } = item;
-        return publicItem;
-      });
-
-    return {
-      ...group,
-      items,
-      pinnedCount: items.filter((item) => item.isPinned).length,
-      groupRankItem: [...itemsWithPinState].sort(compareHistoryItemsBetweenGroups)[0],
-      originalGroupIndex
-    };
-  })
-    .sort((left, right) => (
-      compareHistoryItemsBetweenGroups(left.groupRankItem, right.groupRankItem) ||
-      left.originalGroupIndex - right.originalGroupIndex
-    ))
-    .map((group) => {
-      const { groupRankItem, originalGroupIndex, ...publicGroup } = group;
-      return publicGroup;
-    });
-}
-
-export function applyPinnedStateToItemsByName(items, pinnedKeys = new Set()) {
-  const normalizedPinnedKeys = pinnedKeys instanceof Set
-    ? pinnedKeys
-    : new Set(pinnedKeys ?? []);
-
-  return items
-    .map((item) => {
-      const pinKeys = getItemPinKeys(item);
-      const activePinKeys = pinKeys.filter((key) => normalizedPinnedKeys.has(key));
-      return {
-        ...item,
-        pinKey: getHistoryItemPinKey(item) || pinKeys[0],
-        pinKeys,
-        activePinKeys,
-        isPinned: activePinKeys.length > 0
-      };
-    })
-    .sort((left, right) => {
-      const byPin = Number(right.isPinned) - Number(left.isPinned);
-      const byName = compareDisplayNames(
-        String(left?.title || left?.url || '').trim(),
-        String(right?.title || right?.url || '').trim()
-      );
-      const byTime = Number(right?.lastVisitTime ?? 0) - Number(left?.lastVisitTime ?? 0);
-      return byPin || byName || byTime || String(left?.url ?? '').localeCompare(String(right?.url ?? ''));
-    });
-}
-
-export function compareDisplayNames(leftName, rightName) {
-  const left = String(leftName ?? '').trim();
-  const right = String(rightName ?? '').trim();
-  const byScript = getDisplayNameScriptRank(left) - getDisplayNameScriptRank(right);
-  return byScript || DISPLAY_NAME_COLLATOR.compare(left, right);
-}
-
-function getDisplayNameScriptRank(name) {
-  const firstLetterOrNumber = String(name).match(/[\p{L}\p{N}]/u)?.[0] ?? '';
-
-  if (/^[A-Za-z0-9]$/.test(firstLetterOrNumber)) {
-    return 0;
-  }
-
-  if (/^\p{Script=Han}$/u.test(firstLetterOrNumber)) {
-    return 1;
-  }
-
-  return 2;
+    return { ...group, items, pinnedCount: items.filter((item) => item.isPinned).length };
+  }));
 }
 
 function createPinOrders(pinnedKeys) {
@@ -621,28 +369,15 @@ function decorateItem(item, dedupeKey, metadata) {
     representativeLastVisitTime: metadata.representativeLastVisitTime,
     representativeVisitCount: metadata.representativeVisitCount,
     searchableTitles: metadata.searchableTitles,
-    searchableUrls: metadata.searchableUrls,
     titleOverrideKeys: metadata.titleOverrideKeys,
     totalVisitCount: metadata.totalVisitCount
   };
 }
 
-function mergeTitleOverrideKeys(...items) {
-  const keys = new Set();
-
-  for (const item of items) {
-    for (const key of getItemTitleOverrideKeys(item)) {
-      keys.add(key);
-    }
-  }
-
-  return [...keys];
-}
-
 function getItemTitleOverrideKeys(item) {
   const keys = Array.isArray(item?.titleOverrideKeys) ? item.titleOverrideKeys : [];
   const key = item?.titleOverrideKey || getHistoryItemTitleOverrideKey(item);
-  return [...new Set([...keys, key].filter(Boolean))];
+  return mergeStringValues(keys, [key, getPageIdentityKey(item?.url)]);
 }
 
 function getItemPinKeys(item) {
@@ -662,11 +397,6 @@ function getItemSearchableTitles(item) {
 function isUrlLikeSearchTitle(value) {
   const title = String(value ?? '').trim();
   return /^(?:https?|file):\/\//i.test(title) || /^www\./i.test(title);
-}
-
-function getItemSearchableUrls(item) {
-  const urls = Array.isArray(item?.searchableUrls) ? item.searchableUrls : [];
-  return mergeStringValues(urls, [item?.url, item?.resolvedUrl, item?.dedupeUrl]);
 }
 
 function mergeStringValues(...collections) {
@@ -690,84 +420,6 @@ function addStringValues(target, values) {
     const normalizedValue = String(value ?? '').trim();
     if (normalizedValue) target.add(normalizedValue);
   }
-}
-
-function collectTitleOverrideCandidates(items, indexes, overrides, pageKey) {
-  const candidates = [];
-  const seenKeys = new Set();
-
-  const addCandidate = (sourceKey, value, fallbackTargetUrl, sourceOrder) => {
-    if (!sourceKey || seenKeys.has(sourceKey) || value === undefined) {
-      return;
-    }
-
-    const record = normalizeTitleOverrideValue(value, fallbackTargetUrl);
-    if (!record.title) {
-      return;
-    }
-
-    seenKeys.add(sourceKey);
-    candidates.push({ ...record, sourceKey, sourceOrder });
-  };
-
-  addCandidate(pageKey, overrides.get(pageKey), pageKey, Number.MAX_SAFE_INTEGER);
-
-  indexes.forEach((index, sourceOrder) => {
-    const item = items[index];
-    const originalPageKey = getPageIdentityKey(item?.url);
-    const exactKey = normalizeUrlKey(item?.url);
-    addCandidate(originalPageKey, overrides.get(originalPageKey), item?.url, sourceOrder);
-    addCandidate(exactKey, overrides.get(exactKey), item?.url, sourceOrder);
-  });
-
-  return candidates;
-}
-
-function normalizeTitleOverrideValue(value, fallbackTargetUrl) {
-  if (value && typeof value === 'object') {
-    return {
-      title: getUsableOverrideTitle(value.title),
-      targetUrl: String(value.targetUrl || fallbackTargetUrl || ''),
-      updatedAt: Number.isFinite(Number(value.updatedAt)) ? Number(value.updatedAt) : 0
-    };
-  }
-
-  return {
-    title: getUsableOverrideTitle(value),
-    targetUrl: String(fallbackTargetUrl || ''),
-    updatedAt: 0
-  };
-}
-
-function pickLatestTitleOverride(candidates) {
-  return [...candidates].sort((left, right) => {
-    const byUpdatedAt = right.updatedAt - left.updatedAt;
-    return byUpdatedAt || left.sourceKey.localeCompare(right.sourceKey) ||
-      left.targetUrl.localeCompare(right.targetUrl) || left.title.localeCompare(right.title);
-  })[0];
-}
-
-function pickTitleOverrideTargetIndex(items, indexes, targetUrl) {
-  const normalizedTargetUrl = normalizeUrlKey(targetUrl);
-  const exactMatches = indexes.filter(
-    (index) => normalizeUrlKey(items[index]?.url) === normalizedTargetUrl
-  );
-  const resolvedMatches = exactMatches.length > 0
-    ? exactMatches
-    : indexes.filter(
-        (index) => normalizeUrlKey(items[index]?.dedupeUrl || items[index]?.resolvedUrl) === normalizedTargetUrl
-      );
-  const candidates = resolvedMatches.length > 0 ? resolvedMatches : indexes;
-
-  return candidates.reduce((preferredIndex, index) => {
-    if (preferredIndex < 0) {
-      return index;
-    }
-
-    return pickPreferredItem(items[preferredIndex], items[index]) === items[index]
-      ? index
-      : preferredIndex;
-  }, -1);
 }
 
 function getDedupeCount(item) {
@@ -803,47 +455,20 @@ function getTotalVisitCount(item) {
   return Number(item?.totalVisitCount ?? item?.visitCount ?? 0);
 }
 
-function getGroupVisitCount(item) {
-  return Number(item?.totalVisitCount ?? item?.visitCount ?? 0);
-}
-
-function compareHistoryItemsByCandidateRank(left, right) {
-  const byCount = getTotalVisitCount(right) - getTotalVisitCount(left);
-  const byTime = getVisitTime(right) - getVisitTime(left);
-  const leftKey = String(left?.dedupeKey ?? left?.url ?? '');
-  const rightKey = String(right?.dedupeKey ?? right?.url ?? '');
-  return byCount || byTime || leftKey.localeCompare(rightKey);
-}
-
-// Stable group-internal contract: pinned state is applied later, then renamed,
-// visit count, latest visit time, and finally a deterministic key.
-function compareHistoryItemsWithinGroup(left, right) {
-  const byRename = Number(Boolean(right?.isTitleRenamed)) - Number(Boolean(left?.isTitleRenamed));
-  const byCount = getTotalVisitCount(right) - getTotalVisitCount(left);
-  const byTime = getVisitTime(right) - getVisitTime(left);
-  const leftKey = String(left?.dedupeKey ?? left?.url ?? '');
-  const rightKey = String(right?.dedupeKey ?? right?.url ?? '');
-  return byRename || byCount || byTime || leftKey.localeCompare(rightKey);
-}
-
-// Stable group-external contract: the best item represents its group. Pinned
-// items lead, then visit count, rename state, latest visit time, and key.
-function compareHistoryItemsBetweenGroups(left, right) {
+// One ranking contract for candidates, members and groups in every display mode.
+function compareHistoryItems(left, right) {
   const byPin = Number(Boolean(right?.isPinned)) - Number(Boolean(left?.isPinned));
-  const byPinOrder = (left?.pinOrder ?? Infinity) - (right?.pinOrder ?? Infinity);
-  const byCount = getTotalVisitCount(right) - getTotalVisitCount(left);
+  const byPinOrder = (left?.isPinned ? left.pinOrder ?? Infinity : Infinity) -
+    (right?.isPinned ? right.pinOrder ?? Infinity : Infinity);
   const byRename = Number(Boolean(right?.isTitleRenamed)) - Number(Boolean(left?.isTitleRenamed));
+  const byCount = getTotalVisitCount(right) - getTotalVisitCount(left);
   const byTime = getVisitTime(right) - getVisitTime(left);
   const leftKey = String(left?.dedupeKey ?? left?.url ?? '');
   const rightKey = String(right?.dedupeKey ?? right?.url ?? '');
-  return byPin || byPinOrder || byCount || byRename || byTime || leftKey.localeCompare(rightKey);
+  return byPin || byPinOrder || byRename || byCount || byTime || leftKey.localeCompare(rightKey);
 }
 
-function getGroupKey(item, mode) {
-  if (mode !== 'domain') {
-    return normalizeHistoryKey(item, mode);
-  }
-
+function getGroupKey(item) {
   const rawUrl = String(item?.url ?? '');
 
   try {
@@ -906,17 +531,6 @@ function normalizeSearchText(value) {
 }
 
 function pickPreferredItem(current, candidate) {
-  if (Boolean(candidate?.isTitleRenamed) !== Boolean(current?.isTitleRenamed)) {
-    return candidate?.isTitleRenamed ? candidate : current;
-  }
-
-  const currentRenameTime = Number(current?.renameUpdatedAt ?? 0);
-  const candidateRenameTime = Number(candidate?.renameUpdatedAt ?? 0);
-
-  if (current?.isTitleRenamed && candidateRenameTime !== currentRenameTime) {
-    return candidateRenameTime > currentRenameTime ? candidate : current;
-  }
-
   const currentVisits = getRepresentativeVisitCount(current);
   const candidateVisits = getRepresentativeVisitCount(candidate);
 

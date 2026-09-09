@@ -9,6 +9,7 @@
   }
 
   globalThis.__dedupedHistoryInlineRenameInstalled = true;
+  let currentSession = null;
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type !== INIT_MESSAGE) {
@@ -25,10 +26,7 @@
       return;
     }
 
-    const existingHost = document.getElementById(HOST_ID);
-    if (existingHost) {
-      existingHost.remove();
-    }
+    currentSession?.dispose();
 
     const host = document.createElement('div');
     host.id = HOST_ID;
@@ -99,10 +97,24 @@
         close();
       }
     };
+    let disposed = false;
+    let closeTimer = null;
     const close = () => {
+      if (disposed) return;
+      disposed = true;
+      if (closeTimer !== null) globalThis.clearTimeout(closeTimer);
       window.removeEventListener('keydown', protectRenameKeystroke, true);
       host.remove();
+      if (currentSession === session) currentSession = null;
     };
+    const session = {
+      dispose: close,
+      isActive: () => !disposed,
+      closeSoon() {
+        closeTimer = globalThis.setTimeout(close, 1200);
+      }
+    };
+    currentSession = session;
 
     window.addEventListener('keydown', protectRenameKeystroke, true);
 
@@ -115,17 +127,17 @@
     panel.addEventListener('click', (event) => event.stopPropagation());
     panel.addEventListener('submit', (event) => {
       event.preventDefault();
-      saveRename(draft, input, status, panel, shadow, overlay, close);
+      saveRename(draft, input, status, panel, shadow, overlay, session);
     });
     restoreButton.addEventListener('click', () => {
       input.value = draft.originalTitle || draft.url || '';
-      restoreRename(draft, status, panel, shadow, overlay, close);
+      restoreRename(draft, status, panel, shadow, overlay, session);
     });
     input.focus();
     input.select();
   }
 
-  async function saveRename(draft, input, status, panel, shadow, overlay, close) {
+  async function saveRename(draft, input, status, panel, shadow, overlay, session) {
     const title = input.value.trim().replace(/\s+/g, ' ');
 
     if (!title) {
@@ -142,24 +154,28 @@
         title,
         url: draft.url
       });
+      if (!session.isActive()) return;
       showSuccessMessage(shadow, overlay, '保存成功');
-      closeSoon(close);
+      session.closeSoon();
     } catch (error) {
+      if (!session.isActive()) return;
       setPending(panel, false);
       setError(status, error.message || '保存失败。');
     }
   }
 
-  async function restoreRename(draft, status, panel, shadow, overlay, close) {
+  async function restoreRename(draft, status, panel, shadow, overlay, session) {
     setPending(panel, true);
     try {
       await sendRuntimeMessage({
         type: RESTORE_MESSAGE,
         titleOverrideKey: draft.titleOverrideKey
       });
+      if (!session.isActive()) return;
       showSuccessMessage(shadow, overlay, '已还原原名');
-      closeSoon(close);
+      session.closeSoon();
     } catch (error) {
+      if (!session.isActive()) return;
       setPending(panel, false);
       setError(status, error.message || '还原失败。');
     }
@@ -221,10 +237,6 @@
     text.textContent = message;
     element.append(icon, text);
     shadow.append(element);
-  }
-
-  function closeSoon(close) {
-    globalThis.setTimeout(close, 1200);
   }
 
   function createStyle() {

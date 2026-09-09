@@ -1,5 +1,3 @@
-import { getPageIdentityKey } from './page-identity.js';
-
 export const DEFAULT_HISTORY_PAGE_SIZE = 10000;
 
 /**
@@ -85,93 +83,6 @@ export async function searchChromeHistory(query = {}, options = {}) {
   return [...itemsByUrl.values()];
 }
 
-/**
- * Add renamed pages that are absent from the selected time window.
- * Renames are not bookmarks: a page is restored only while at least one URL
- * with the same page identity still exists in Chrome's all-time history.
- */
-export function appendTimeExemptRenamedItems(items, titleOverrides, options = {}) {
-  const windowItems = Array.isArray(items) ? items : [];
-  const allHistoryItems = Array.isArray(options.allHistoryItems)
-    ? options.allHistoryItems
-    : windowItems;
-  const overrides = titleOverrides instanceof Map
-    ? titleOverrides
-    : new Map(Object.entries(titleOverrides ?? {}));
-  const existingPageKeys = new Set(
-    windowItems.map((item) => getPageIdentityKey(item?.url)).filter(Boolean)
-  );
-  const renamedPageKeys = new Set();
-
-  for (const [storedKey, record] of overrides) {
-    const targetUrl = String(record?.targetUrl ?? '').trim();
-    const pageKey = getPageIdentityKey(targetUrl) || String(storedKey ?? '').trim();
-
-    if (!pageKey || existingPageKeys.has(pageKey)) {
-      continue;
-    }
-
-    renamedPageKeys.add(pageKey);
-  }
-
-  if (renamedPageKeys.size === 0) {
-    return windowItems;
-  }
-
-  const restoredItems = allHistoryItems.filter((item) => {
-    const pageKey = getPageIdentityKey(item?.url);
-    return renamedPageKeys.has(pageKey) && !existingPageKeys.has(pageKey);
-  });
-
-  return restoredItems.length > 0 ? [...windowItems, ...restoredItems] : windowItems;
-}
-
-export async function appendTimeExemptRenamedItemsCooperatively(
-  items,
-  titleOverrides,
-  options = {}
-) {
-  const windowItems = Array.isArray(items) ? items : [];
-  const allHistoryItems = Array.isArray(options.allHistoryItems)
-    ? options.allHistoryItems
-    : windowItems;
-  const overrides = titleOverrides instanceof Map
-    ? titleOverrides
-    : new Map(Object.entries(titleOverrides ?? {}));
-  const batchSize = normalizePositiveInteger(options.batchSize, 1000);
-  const yieldControl = options.yieldControl ?? defaultCooperativeYield;
-  const existingPageKeys = new Set();
-
-  for (let index = 0; index < windowItems.length; index += 1) {
-    const pageKey = getPageIdentityKey(windowItems[index]?.url);
-    if (pageKey) existingPageKeys.add(pageKey);
-    if ((index + 1) % batchSize === 0) await yieldControl();
-  }
-
-  const renamedPageKeys = new Set();
-  for (const [storedKey, record] of overrides) {
-    const targetUrl = String(record?.targetUrl ?? '').trim();
-    const pageKey = getPageIdentityKey(targetUrl) || String(storedKey ?? '').trim();
-    if (pageKey && !existingPageKeys.has(pageKey)) renamedPageKeys.add(pageKey);
-  }
-
-  if (renamedPageKeys.size === 0) {
-    return windowItems;
-  }
-
-  const restoredItems = [];
-  for (let index = 0; index < allHistoryItems.length; index += 1) {
-    const item = allHistoryItems[index];
-    const pageKey = getPageIdentityKey(item?.url);
-    if (renamedPageKeys.has(pageKey) && !existingPageKeys.has(pageKey)) {
-      restoredItems.push(item);
-    }
-    if ((index + 1) % batchSize === 0) await yieldControl();
-  }
-
-  return restoredItems.length > 0 ? [...windowItems, ...restoredItems] : windowItems;
-}
-
 function resolveChromeApis(options) {
   const chromeApi = options.chromeApi ?? globalThis.chrome;
 
@@ -235,8 +146,4 @@ function createChromeApiError(lastError, fallbackMessage) {
     ? lastError.message
     : fallbackMessage;
   return new Error(message);
-}
-
-function defaultCooperativeYield() {
-  return new Promise((resolve) => globalThis.setTimeout(resolve, 0));
 }

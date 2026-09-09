@@ -1,4 +1,5 @@
 import { getPageIdentityKey } from './page-identity.js';
+import { normalizeSearchRange } from './history-utils.js';
 
 export const PINNED_URLS_STORAGE_KEY = 'deduped-history-pinned-urls';
 export const TITLE_OVERRIDES_STORAGE_KEY = 'deduped-history-title-overrides';
@@ -10,20 +11,14 @@ export const CAPTURED_PAGE_TITLES_STORAGE_KEY = 'deduped-history-captured-page-t
 
 const RENAME_DRAFT_TTL_MS = 15 * 60 * 1000;
 const MAX_CAPTURED_PAGE_TITLES = 5000;
-const SEARCH_RANGE_VALUES = new Set(['day', 'week', 'month', 'quarter', 'all']);
-const TITLE_OVERRIDES_MIGRATION_VERSION = 5;
+const CAPTURED_RESOLUTION_VERSION = 1;
+const TITLE_OVERRIDES_MIGRATION_VERSION = 6;
 const STORAGE_MUTATION_LOCK_NAME = 'deduped-history-storage-mutation';
 const storageMutationQueues = new Map();
 
 export async function loadPinnedUrlKeys() {
   const storedValue = await getStorageValue(PINNED_URLS_STORAGE_KEY, []);
   return normalizePinnedPageKeys(storedValue);
-}
-
-export async function savePinnedUrlKeys(keys) {
-  await withStorageMutationLock(PINNED_URLS_STORAGE_KEY, async () => {
-    await setStorageValue(PINNED_URLS_STORAGE_KEY, [...normalizePinnedPageKeys(keys)]);
-  });
 }
 
 export async function togglePinnedUrlKey(key, shouldPin, relatedKeys = []) {
@@ -66,15 +61,9 @@ export async function loadTitleOverrides() {
   }
 
   return withStorageMutationLock(TITLE_OVERRIDES_STORAGE_KEY, async () => {
-    const currentVersion = Number(await getStorageValue(
-      TITLE_OVERRIDES_MIGRATION_STORAGE_KEY,
-      0
-    ));
-    const overrides = normalizePageTitleOverrideMap(
-      await getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {})
-    );
+    const { overrides, needsMigration } = await readTitleOverridesForMutation();
 
-    if (currentVersion < TITLE_OVERRIDES_MIGRATION_VERSION) {
+    if (needsMigration) {
       await setStorageValues({
         [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(overrides),
         [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION
@@ -88,10 +77,6 @@ export async function loadTitleOverrides() {
 export async function loadCapturedPageTitles() {
   const storedValue = await getStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, {});
   return normalizeCapturedPageMap(storedValue);
-}
-
-export async function saveCapturedPageTitle(key, title, options = {}) {
-  return saveCapturedPageTitles([{ key, title, ...normalizeCapturedTitleSaveOptions(options) }]);
 }
 
 export async function saveCapturedPageTitles(entries) {
@@ -120,7 +105,10 @@ export async function saveCapturedPageTitles(entries) {
       records.set(entry.key, {
         title: entry.title,
         updatedAt: entry.updatedAt,
-        ...(nextResolvedUrl ? { resolvedUrl: nextResolvedUrl } : {})
+        ...(nextResolvedUrl ? {
+          resolvedUrl: nextResolvedUrl,
+          resolutionVersion: CAPTURED_RESOLUTION_VERSION
+        } : {})
       });
       changed = true;
     }
@@ -134,32 +122,6 @@ export async function saveCapturedPageTitles(entries) {
       .slice(0, MAX_CAPTURED_PAGE_TITLES);
     await setStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, Object.fromEntries(recentRecords));
   });
-}
-
-export function updateCapturedTitleRecords(value, key, title, updatedAt, resolvedUrl) {
-  const records = normalizeCapturedTitleRecords(value);
-  const normalizedKey = normalizeStorageKey(key);
-  const normalizedTitle = normalizeTitle(title);
-  const normalizedUpdatedAt = Number(updatedAt);
-  const normalizedResolvedUrl = normalizeStorageKey(resolvedUrl);
-  const current = records.get(normalizedKey);
-  const nextResolvedUrl = normalizedResolvedUrl || current?.resolvedUrl || '';
-
-  if (
-    !normalizedKey ||
-    !normalizedTitle ||
-    !Number.isFinite(normalizedUpdatedAt) ||
-    (current?.title === normalizedTitle && (current?.resolvedUrl || '') === nextResolvedUrl)
-  ) {
-    return { records, changed: false };
-  }
-
-  records.set(normalizedKey, {
-    title: normalizedTitle,
-    updatedAt: normalizedUpdatedAt,
-    ...(nextResolvedUrl ? { resolvedUrl: nextResolvedUrl } : {})
-  });
-  return { records, changed: true };
 }
 
 export async function loadGroupNameOverrides() {
@@ -225,9 +187,7 @@ export async function saveTitleOverride(key, title, options = {}) {
   }
 
   await withStorageMutationLock(TITLE_OVERRIDES_STORAGE_KEY, async () => {
-    const overrides = normalizePageTitleOverrideMap(
-      await getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {})
-    );
+    const { overrides } = await readTitleOverridesForMutation();
     const current = overrides.get(normalizedKey);
     const updatedAt = hasExplicitUpdatedAt
       ? explicitUpdatedAt
@@ -257,9 +217,7 @@ export async function deleteTitleOverrides(keys) {
   }
 
   await withStorageMutationLock(TITLE_OVERRIDES_STORAGE_KEY, async () => {
-    const overrides = normalizePageTitleOverrideMap(
-      await getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {})
-    );
+    const { overrides } = await readTitleOverridesForMutation();
 
     for (const normalizedKey of normalizedKeys) {
       overrides.delete(normalizedKey);
@@ -333,6 +291,10 @@ export function normalizeTitleOverrideMap(value) {
 }
 
 export function normalizePageTitleOverrideMap(value) {
+  return normalizePageTitleOverrideRecords(value, false);
+}
+
+function normalizePageTitleOverrideRecords(value, rekeyFromTarget) {
   const entries = value instanceof Map ? [...value.entries()] : Object.entries(value ?? {});
   const overrides = new Map();
 
@@ -345,8 +307,12 @@ export function normalizePageTitleOverrideMap(value) {
     }
 
     const isStructuredRecord = storedRecord && typeof storedRecord === 'object';
+    // Only the versioned migration can recover a concrete resource from an old
+    // broad key. Normal reads keep canonical keys established by real redirects.
     const pageKey = normalizePageKey(
-      isStructuredRecord ? normalizedStoredKey : (record.targetUrl || normalizedStoredKey)
+      isStructuredRecord && !rekeyFromTarget
+        ? normalizedStoredKey
+        : (record.targetUrl || normalizedStoredKey)
     );
     if (!pageKey) {
       return;
@@ -364,12 +330,6 @@ export function normalizePageTitleOverrideMap(value) {
   );
 }
 
-export function normalizeCapturedTitleMap(value) {
-  return new Map(
-    [...normalizeCapturedTitleRecords(value)].map(([key, record]) => [key, record.title])
-  );
-}
-
 export function normalizeCapturedPageMap(value) {
   return new Map(
     [...normalizeCapturedTitleRecords(value)].map(([key, record]) => [
@@ -384,13 +344,12 @@ export function normalizeCapturedPageMap(value) {
 
 export function normalizeLastSearchState(value) {
   const query = normalizeTitle(value?.query);
-  const range = normalizeSearchRange(value?.range);
   const showRenamedOnly = Boolean(value?.showRenamedOnly);
   const showMinimalMode = Boolean(value?.showMinimalMode);
 
   return {
     query,
-    range,
+    range: normalizeSearchRange(value?.range),
     showRenamedOnly,
     showMinimalMode
   };
@@ -463,26 +422,22 @@ function normalizeCapturedTitleRecords(value) {
     const normalizedKey = normalizeStorageKey(key);
     const normalizedTitle = normalizeTitle(typeof record === 'string' ? record : record?.title);
     const updatedAt = typeof record === 'string' ? 0 : Number(record?.updatedAt);
-    const resolvedUrl = normalizeStorageKey(record?.resolvedUrl);
+    // Earlier releases inferred redirects from tab updates during loading.
+    // Keep their titles, but never promote those unverified URL relationships.
+    const resolvedUrl = record?.resolutionVersion === CAPTURED_RESOLUTION_VERSION
+      ? normalizeStorageKey(record.resolvedUrl)
+      : '';
 
     if (normalizedKey && normalizedTitle && Number.isFinite(updatedAt)) {
       records.set(normalizedKey, {
         title: normalizedTitle,
         updatedAt,
-        ...(resolvedUrl ? { resolvedUrl } : {})
+        ...(resolvedUrl ? { resolvedUrl, resolutionVersion: CAPTURED_RESOLUTION_VERSION } : {})
       });
     }
   }
 
   return records;
-}
-
-function normalizeCapturedTitleSaveOptions(options) {
-  const value = typeof options === 'number' ? { updatedAt: options } : (options ?? {});
-  return {
-    resolvedUrl: value.resolvedUrl,
-    updatedAt: value.updatedAt
-  };
 }
 
 function normalizeCapturedTitleSaveEntries(entries) {
@@ -547,6 +502,18 @@ function serializePageTitleOverrides(overrides) {
   );
 }
 
+async function readTitleOverridesForMutation() {
+  const [version, value] = await Promise.all([
+    getStorageValue(TITLE_OVERRIDES_MIGRATION_STORAGE_KEY, 0),
+    getStorageValue(TITLE_OVERRIDES_STORAGE_KEY, {})
+  ]);
+  const needsMigration = Number(version) < TITLE_OVERRIDES_MIGRATION_VERSION;
+  return {
+    overrides: normalizePageTitleOverrideRecords(value, needsMigration),
+    needsMigration
+  };
+}
+
 function normalizePageKey(value) {
   const normalizedValue = normalizeStorageKey(value);
   return normalizedValue ? getPageIdentityKey(normalizedValue) : '';
@@ -562,11 +529,6 @@ function normalizeTitle(value) {
     .replace(/\p{Cf}+/gu, '')
     .trim()
     .replace(/\s+/g, ' ');
-}
-
-function normalizeSearchRange(value) {
-  const normalizedRange = normalizeStorageKey(value);
-  return SEARCH_RANGE_VALUES.has(normalizedRange) ? normalizedRange : 'month';
 }
 
 async function getStorageValue(key, fallbackValue) {

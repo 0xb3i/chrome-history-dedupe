@@ -1,6 +1,6 @@
 import { searchChromeHistory } from '../history-data.js';
-import { loadCapturedPageTitles, loadTitleOverrides } from '../storage.js';
-import { buildHistoryRangeIndexes, HISTORY_INDEX_ALGORITHM_VERSION } from './derive.js';
+import { loadCapturedPageTitles } from '../storage.js';
+import { buildHistoryIndex, HISTORY_INDEX_ALGORITHM_VERSION } from './derive.js';
 
 const DEFAULT_EVENT_BATCH_MS = 100;
 const DEFAULT_FULL_SYNC_MAX_AGE_MS = 60 * 60 * 1000;
@@ -8,7 +8,6 @@ const DEFAULT_FULL_SYNC_MAX_AGE_MS = 60 * 60 * 1000;
 export function createHistoryIndexService(options = {}) {
   const store = options.store;
   const searchHistory = options.searchHistory ?? searchChromeHistory;
-  const loadOverrides = options.loadTitleOverrides ?? loadTitleOverrides;
   const loadCapturedTitles = options.loadCapturedPageTitles ?? loadCapturedPageTitles;
   const now = options.now ?? Date.now;
   const notifyUpdated = options.notifyUpdated ?? (() => {});
@@ -34,14 +33,11 @@ export function createHistoryIndexService(options = {}) {
 
   const rebuildFromRaw = async () => {
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      const [{ items, rawRevision }, titleOverrides, capturedPageTitles] = await Promise.all([
+      const [{ items, rawRevision }, capturedPageTitles] = await Promise.all([
         store.loadRawSnapshot(),
-        loadOverrides(),
         loadCapturedTitles()
       ]);
-      const indexes = await buildHistoryRangeIndexes(items, {
-        now: now(),
-        titleOverrides,
+      const indexes = await buildHistoryIndex(items, {
         capturedPageTitles,
         yieldControl: options.yieldControl
       });

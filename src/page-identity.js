@@ -10,49 +10,20 @@ const TRACKING_PARAMS = new Set([
   'yclid'
 ]);
 
-const RESOURCE_ID_QUERY_PARAM_NAMES = new Map([
-  ['appid', 'app_id'],
-  ['baseid', 'base_id'],
-  ['id', 'id'],
-  ['nodeid', 'node_id'],
-  ['projectid', 'project_id'],
-  ['qualifiedname', 'qualified_name'],
-  ['resourceid', 'resource_id'],
-  ['serverid', 'server_id'],
-  ['storyid', 'story_id'],
-  ['taskid', 'task_id'],
-  ['workitemid', 'work_item_id']
+// Resource rules are scoped to a known site and route. Unknown URL components
+// stay in the identity: their spelling alone cannot prove that they are UI state.
+const FEISHU_DOMAIN_ROOTS = ['feishu.cn', 'larksuite.com', 'larkoffice.com'];
+const FEISHU_RESOURCE_ROUTE = /^\/(base|docs|docx|file|mindnotes|sheets|wiki)\/([A-Za-z0-9_-]+)\/?$/;
+const FEISHU_PRESENTATION_PARAMS = new Set([
+  'from', 'open_in_browser', 'create_from'
 ]);
+const MCP_RESOURCE_ROUTE = /^(\/tae\/mcp_server\/[A-Za-z0-9_-]+)(?:\/(?:tools|inspector))?\/?$/;
 
-const HASH_ROUTE_PATTERN = /^#!?\//;
-const FEISHU_RESOURCE_ROUTE_SEGMENTS = new Set([
-  'base',
-  'docs',
-  'docx',
-  'file',
-  'mindnotes',
-  'sheets',
-  'wiki'
-]);
-const FEISHU_DOMAIN_ROOTS = [
-  'feishu.cn',
-  'larksuite.com',
-  'larkoffice.com'
-];
-const STATEFUL_ROUTE_SEGMENTS = new Set([
-  'keyword_search'
-]);
 export function normalizeUrlKey(rawUrl) {
   const rawValue = String(rawUrl ?? '');
-
   try {
     const url = new URL(rawValue);
     normalizeUrlSurface(url);
-
-    if (!isHashRoute(url.hash)) {
-      url.hash = '';
-    }
-
     return url.href;
   } catch {
     return rawValue;
@@ -60,263 +31,73 @@ export function normalizeUrlKey(rawUrl) {
 }
 
 export function getPageIdentityKey(rawUrl) {
-  const rawValue = String(rawUrl ?? '');
-
+  const normalizedUrl = normalizeUrlKey(rawUrl);
   try {
-    const url = new URL(rawValue);
+    const url = new URL(normalizedUrl);
+    if (!/^https?:$/.test(url.protocol)) return normalizedUrl;
 
-    if (!/^https?:$/.test(url.protocol)) {
-      return normalizeUrlKey(rawValue);
+    if (isGoogleSearchUrl(url)) {
+      const query = url.searchParams.get('q')?.trim() ?? '';
+      url.search = query ? new URLSearchParams([['q', query]]).toString() : '';
+      url.hash = '';
+      return url.href;
     }
 
-    if (isHashRoute(url.hash)) {
-      return getHashRouteIdentityKey(url);
+    const feishuRoot = getDomainRoot(url.hostname, FEISHU_DOMAIN_ROOTS);
+    const feishuRoute = url.pathname.match(FEISHU_RESOURCE_ROUTE);
+    if (feishuRoot && !url.port && feishuRoute) {
+      url.hostname = feishuRoot;
+      url.pathname = `/${feishuRoute[1]}/${feishuRoute[2]}`;
+      for (const key of FEISHU_PRESENTATION_PARAMS) url.searchParams.delete(key);
+      // A sheet/base can use fragment state to identify a child resource.
+      if (!['base', 'sheets'].includes(feishuRoute[1])) url.hash = '';
+      return url.href;
     }
 
-    return getUrlPageIdentityKey(url);
-  } catch {
-    return rawValue;
-  }
-}
-
-export function getStableResourceIdentityKey(rawUrl) {
-  return getResourceIdentityKey(rawUrl, 'first');
-}
-
-export function getLegacyResourceIdentityKey(rawUrl) {
-  return getResourceIdentityKey(rawUrl, 'last');
-}
-
-function getUrlPageIdentityKey(inputUrl) {
-  const url = new URL(inputUrl.href);
-  url.hash = '';
-  normalizeUrlSurface(url);
-
-  if (isStatefulRoute(url.pathname)) {
-    url.search = '';
-    return url.href;
-  }
-
-  const resourcePath = getResourcePath(url, 'first');
-  const resourceQuery = resourcePath.hasResourceId ? '' : getResourceQuery(url);
-  const origin = getPageOrigin(url, resourcePath);
-  const path = resourcePath.hasResourceId ? resourcePath.value : (url.pathname || '/');
-  return `${origin}${path}${resourceQuery}`;
-}
-
-function isStatefulRoute(pathname) {
-  const segments = String(pathname ?? '')
-    .split('/')
-    .map((segment) => safeDecodeUrlPath(segment).trim().toLowerCase())
-    .filter(Boolean);
-  return STATEFUL_ROUTE_SEGMENTS.has(segments.at(-1));
-}
-
-function getHashRouteIdentityKey(inputUrl) {
-  const url = new URL(inputUrl.href);
-  const rawRoute = url.hash.slice(1);
-  const hasBang = rawRoute.startsWith('!');
-  const routeValue = hasBang ? rawRoute.slice(1) : rawRoute;
-  const routeUrl = new URL(routeValue, 'https://hash-route.invalid');
-  const routeIdentity = getUrlPageIdentityKey(routeUrl);
-  const routeSuffix = routeIdentity.slice('https://hash-route.invalid'.length);
-
-  url.hash = '';
-  const shellIdentity = getUrlPageIdentityKey(url);
-
-  return `${shellIdentity}#${hasBang ? '!' : ''}${routeSuffix}`;
-}
-
-function getResourceIdentityKey(rawUrl, position) {
-  try {
-    const url = new URL(rawUrl);
-
-    if (!/^https?:$/.test(url.protocol)) {
-      return '';
-    }
-
-    if (isHashRoute(url.hash)) {
-      const rawRoute = url.hash.slice(1).replace(/^!/, '');
-      const routeUrl = new URL(rawRoute, 'https://hash-route.invalid');
-      const routeResourceKey = getResourceIdentityFromUrl(routeUrl, position);
-
-      if (!routeResourceKey) {
-        return '';
+    if (isByteCloudHost(url.hostname)) {
+      const resourcePath = url.pathname.match(MCP_RESOURCE_ROUTE)?.[1];
+      if (resourcePath) {
+        url.pathname = resourcePath;
+        return url.href;
       }
 
-      const routeSuffix = routeResourceKey.slice('https://hash-route.invalid'.length);
-      url.hash = '';
-      const shellIdentity = getUrlPageIdentityKey(url);
-      return `${shellIdentity}#${routeSuffix}`;
+      // Only normalize a hash router after recognizing the same business route.
+      const hashRoute = url.hash.match(/^#(!?)(\/.*)$/);
+      if (hashRoute) {
+        const route = new URL(hashRoute[2], url.origin);
+        const hashResourcePath = route.pathname.match(MCP_RESOURCE_ROUTE)?.[1];
+        if (hashResourcePath && route.origin === url.origin) {
+          normalizeUrlSurface(route);
+          url.hash = `${hashRoute[1]}${hashResourcePath}${route.search}${route.hash}`;
+        }
+      }
     }
-
-    return getResourceIdentityFromUrl(url, position);
+    return url.href;
   } catch {
-    return '';
+    return normalizedUrl;
   }
 }
 
-function getResourceIdentityFromUrl(inputUrl, position) {
-  const url = new URL(inputUrl.href);
-  normalizeUrlSurface(url);
-  const resourcePath = getResourcePath(url, position);
-  const resourceQuery = resourcePath.hasResourceId && position === 'first'
-    ? ''
-    : getResourceQuery(url);
-
-  if (!resourcePath.hasResourceId && !resourceQuery) {
-    return '';
-  }
-
-  const origin = getPageOrigin(url, resourcePath);
-  const path = resourcePath.hasResourceId ? resourcePath.value : (url.pathname || '/');
-  return `${origin}${path}${resourceQuery}`;
+function isGoogleSearchUrl(url) {
+  return url.pathname === '/search' &&
+    /(^|\.)google\.[a-z]{2,}(?:\.[a-z]{2,})?$/.test(url.hostname);
 }
 
-function getResourcePath(url, position) {
-  const segments = url.pathname
-    .split('/')
-    .map((segment) => safeDecodeUrlPath(segment).trim())
-    .filter(Boolean);
-  const resourceIdIndexes = [];
-
-  for (let index = 0; index < segments.length; index += 1) {
-    if (isResourceIdPathSegment(segments[index])) {
-      resourceIdIndexes.push(index);
-    }
-  }
-
-  if (resourceIdIndexes.length === 0) {
-    return {
-      value: url.pathname || '/',
-      hasResourceId: false
-    };
-  }
-
-  const resourceIdIndex = position === 'first'
-    ? resourceIdIndexes[0]
-    : resourceIdIndexes.at(-1);
-  const identitySegments = position === 'first'
-    ? segments.slice(0, resourceIdIndex + 1)
-    : segments;
-
-  return {
-    value: `/${identitySegments.map(encodePathSegment).join('/')}`,
-    hasResourceId: true
-  };
+function getDomainRoot(hostname, roots) {
+  return roots.find((root) => hostname === root || hostname.endsWith(`.${root}`));
 }
 
-function getPageOrigin(url, resourcePath) {
-  const hostname = url.hostname.toLowerCase();
-  const port = url.port ? `:${url.port}` : '';
-
-  if (!port && resourcePath.hasResourceId && isFeishuResourceRoute(resourcePath.value)) {
-    const domainRoot = FEISHU_DOMAIN_ROOTS.find((root) => (
-      hostname === root || hostname.endsWith(`.${root}`)
-    ));
-
-    if (domainRoot) {
-      return `${url.protocol}//${domainRoot}`;
-    }
-  }
-
-  return `${url.protocol}//${hostname}${port}`;
-}
-
-function isFeishuResourceRoute(resourcePath) {
-  const firstSegment = String(resourcePath ?? '')
-    .split('/')
-    .map((segment) => safeDecodeUrlPath(segment).trim().toLowerCase())
-    .find(Boolean);
-  return FEISHU_RESOURCE_ROUTE_SEGMENTS.has(firstSegment);
-}
-
-function getResourceQuery(url) {
-  const entries = [];
-
-  for (const [key, value] of url.searchParams.entries()) {
-    const canonicalKey = getResourceIdQueryParamName(key);
-
-    if (canonicalKey && value.trim()) {
-      entries.push([canonicalKey, value]);
-    }
-  }
-
-  entries.sort((left, right) => (
-    left[0].localeCompare(right[0]) || left[1].localeCompare(right[1])
-  ));
-  const params = new URLSearchParams(entries);
-  const query = params.toString();
-  return query ? `?${query}` : '';
-}
-
-function getResourceIdQueryParamName(key) {
-  const normalizedKey = String(key).trim().toLowerCase().replace(/[-_]/g, '');
-  return RESOURCE_ID_QUERY_PARAM_NAMES.get(normalizedKey) || '';
+function isByteCloudHost(hostname) {
+  return Boolean(getDomainRoot(hostname, ['bytedance.net', 'byted.org'])) &&
+    hostname.split('.')[0].startsWith('cloud');
 }
 
 function normalizeUrlSurface(url) {
-  removeTrackingParams(url);
-  trimTrailingPathSlash(url);
-  url.searchParams.sort();
-}
-
-function removeTrackingParams(url) {
   for (const key of [...url.searchParams.keys()]) {
     const normalizedKey = key.toLowerCase();
-
     if (normalizedKey.startsWith('utm_') || TRACKING_PARAMS.has(normalizedKey)) {
       url.searchParams.delete(key);
     }
   }
-}
-
-function isHashRoute(hash) {
-  return HASH_ROUTE_PATTERN.test(String(hash ?? ''));
-}
-
-function isResourceIdPathSegment(segment) {
-  const normalizedSegment = String(segment).toLowerCase();
-
-  if (/^[0-9]{5,}$/.test(normalizedSegment)) {
-    return !isCalendarDateSegment(normalizedSegment);
-  }
-
-  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(normalizedSegment)) {
-    return true;
-  }
-
-  return /^(?=.*[a-z])(?=.*\d)[a-z0-9_-]{6,}$/.test(normalizedSegment);
-}
-
-function isCalendarDateSegment(segment) {
-  if (!/^\d{8}$/.test(segment)) {
-    return false;
-  }
-
-  const year = Number(segment.slice(0, 4));
-  const month = Number(segment.slice(4, 6));
-  const day = Number(segment.slice(6, 8));
-  const date = new Date(Date.UTC(year, month - 1, day));
-  return date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day;
-}
-
-function trimTrailingPathSlash(url) {
-  if (url.pathname !== '/' && url.pathname.endsWith('/')) {
-    url.pathname = url.pathname.replace(/\/+$/, '');
-  }
-}
-
-function safeDecodeUrlPath(value) {
-  try {
-    return decodeURI(value);
-  } catch {
-    return value;
-  }
-}
-
-function encodePathSegment(segment) {
-  return encodeURIComponent(segment).replace(/%2F/gi, '/');
+  url.searchParams.sort();
 }

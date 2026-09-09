@@ -8,8 +8,7 @@ import {
   loadTitleOverrides,
   saveCapturedPageTitles,
   saveRenameDraft,
-  saveTitleOverride,
-  TITLE_OVERRIDES_STORAGE_KEY
+  saveTitleOverride
 } from './storage.js';
 import { createNavigationTracker } from './navigation-tracker.js';
 import { getCenteredCoordinate } from './window-placement.js';
@@ -19,7 +18,6 @@ import { createHistoryIndexService } from './history-index/service.js';
 import {
   HISTORY_INDEX_ALARM_NAME,
   HISTORY_INDEX_ENSURE_MESSAGE,
-  HISTORY_INDEX_REBUILD_MESSAGE,
   HISTORY_INDEX_UPDATED_MESSAGE
 } from './history-index/protocol.js';
 
@@ -42,12 +40,21 @@ const historyIndexService = createHistoryIndexService({
   notifyUpdated: notifyHistoryIndexUpdated
 });
 
+globalThis.chrome?.webNavigation?.onBeforeNavigate?.addListener((details) => {
+  navigationTracker.beforeNavigate(details);
+});
+globalThis.chrome?.webNavigation?.onCommitted?.addListener((details) => {
+  navigationTracker.committed(details);
+});
+globalThis.chrome?.webNavigation?.onErrorOccurred?.addListener((details) => {
+  navigationTracker.errorOccurred(details);
+});
 globalThis.chrome?.tabs?.onUpdated?.addListener((tabId, changeInfo, tab) => {
-  const navigationUrls = navigationTracker.update(tabId, changeInfo, tab);
-  const hasPendingNavigation = Boolean(tab?.pendingUrl) && tab.pendingUrl !== tab.url;
+  const navigationUrls = navigationTracker.getCaptureUrls(tabId, tab);
+  if (navigationUrls.length === 0) return;
 
   if (
-    (changeInfo?.title && !hasPendingNavigation) ||
+    changeInfo?.title ||
     changeInfo?.status === 'complete' ||
     (changeInfo?.url && tab?.status === 'complete')
   ) {
@@ -69,7 +76,7 @@ globalThis.chrome?.history?.onVisitRemoved?.addListener((details) => {
 globalThis.chrome?.storage?.onChanged?.addListener((changes, areaName) => {
   if (
     areaName === 'local' &&
-    (changes[TITLE_OVERRIDES_STORAGE_KEY] || changes[CAPTURED_PAGE_TITLES_STORAGE_KEY])
+    changes[CAPTURED_PAGE_TITLES_STORAGE_KEY]
   ) {
     scheduleDerivedIndexRebuild();
   }
@@ -104,13 +111,6 @@ globalThis.chrome?.runtime?.onMessage?.addListener((message, _sender, sendRespon
     return true;
   }
 
-  if (message?.type === HISTORY_INDEX_REBUILD_MESSAGE) {
-    historyIndexService.rebuildDerived({ immediate: true })
-      .then((state) => sendResponse({ ok: true, state }))
-      .catch((error) => sendResponse({ ok: false, error: error.message || '索引更新失败。' }));
-    return true;
-  }
-
   if (message?.type === INLINE_RENAME_SAVE_MESSAGE) {
     saveInlineRename(message)
       .then(() => sendResponse({ ok: true }))
@@ -134,7 +134,8 @@ async function captureOpenTabTitles() {
   try {
     const tabs = await queryTabs({});
     for (const tab of tabs) {
-      enqueueCapturedTabTitle(tab);
+      const navigationUrls = navigationTracker.getCaptureUrls(tab.id, tab);
+      if (navigationUrls.length > 0) enqueueCapturedTabTitle(tab, navigationUrls);
     }
   } catch {
     // Title capture enriches history but must never block the extension.

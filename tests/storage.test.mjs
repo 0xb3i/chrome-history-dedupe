@@ -3,19 +3,20 @@ import test from 'node:test';
 
 import {
   CAPTURED_PAGE_TITLES_STORAGE_KEY,
+  LAST_SEARCH_STATE_STORAGE_KEY,
+  loadLastSearchState,
   loadTitleOverrides,
   normalizeCapturedPageMap,
-  normalizeCapturedTitleMap,
   normalizeLastSearchState,
   normalizePageTitleOverrideMap,
   normalizePinnedPageKeys,
   saveCapturedPageTitles,
+  saveLastSearchState,
   saveTitleOverride,
-  togglePinnedUrlKey,
-  updateCapturedTitleRecords
+  togglePinnedUrlKey
 } from '../src/storage.js';
 
-test('last search state normalizes query, range, and renamed filter', () => {
+test('last search state normalizes query and display preferences and the selected time range', () => {
   assert.deepEqual(
     normalizeLastSearchState({
       query: '  MEEGO   story  ',
@@ -32,31 +33,48 @@ test('last search state normalizes query, range, and renamed filter', () => {
   );
 });
 
-test('last search state falls back to the main page default for invalid ranges', () => {
+test('last search state defaults missing or invalid ranges to all history', () => {
   assert.deepEqual(normalizeLastSearchState({ query: 'MEEGO', range: 'forever' }), {
     query: 'MEEGO',
-    range: 'month',
+    range: 'all',
     showRenamedOnly: false,
     showMinimalMode: false
   });
 });
 
+test('loading and saving search preferences preserves the selected range', async () => {
+  const values = { [LAST_SEARCH_STATE_STORAGE_KEY]: {
+    query: 'Old handbook', range: 'day', showRenamedOnly: false, showMinimalMode: true
+  } };
+  globalThis.chrome = createStorageChrome(values);
+  try {
+    const loaded = await loadLastSearchState();
+    assert.deepEqual(loaded, {
+      query: 'Old handbook', range: 'day', showRenamedOnly: false, showMinimalMode: true
+    });
+    await saveLastSearchState({ ...loaded, range: 'week' });
+    assert.deepEqual(values[LAST_SEARCH_STATE_STORAGE_KEY], { ...loaded, range: 'week' });
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
 test('legacy title overrides collapse by page identity without deleting unrelated same-name pages', () => {
   const migrated = normalizePageTitleOverrideMap(new Map([
-    ['https://example.com/docs/abc12345/tools', 'First name'],
-    ['https://example.com/docs/abc12345/settings', 'Last stored name'],
-    ['https://example.com/docs/xyz98765/tools', 'Last stored name']
+    ['https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/tools', 'First name'],
+    ['https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/inspector', 'Last stored name'],
+    ['https://cloud-ttp-us.bytedance.net/tae/mcp_server/xyz98765/tools', 'Last stored name']
   ]));
 
   assert.deepEqual([...migrated], [
-    ['https://example.com/docs/abc12345', {
+    ['https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345', {
       title: 'Last stored name',
-      targetUrl: 'https://example.com/docs/abc12345/settings',
+      targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/inspector',
       updatedAt: 0
     }],
-    ['https://example.com/docs/xyz98765', {
+    ['https://cloud-ttp-us.bytedance.net/tae/mcp_server/xyz98765', {
       title: 'Last stored name',
-      targetUrl: 'https://example.com/docs/xyz98765/tools',
+      targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/xyz98765/tools',
       updatedAt: 0
     }]
   ]);
@@ -64,23 +82,23 @@ test('legacy title overrides collapse by page identity without deleting unrelate
 
 test('structured title overrides keep the most recently updated record per page', () => {
   const migrated = normalizePageTitleOverrideMap(new Map([
-    ['https://example.com/docs/abc12345/tools', {
+    ['https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/tools', {
       title: 'Newer name',
-      targetUrl: 'https://example.com/docs/abc12345/tools',
+      targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/tools',
       updatedAt: 200
     }],
-    ['https://example.com/docs/abc12345/settings', {
+    ['https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/inspector', {
       title: 'Older name',
-      targetUrl: 'https://example.com/docs/abc12345/settings',
+      targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/inspector',
       updatedAt: 100
     }]
   ]));
 
   assert.equal(migrated.size, 1);
-  assert.equal(migrated.get('https://example.com/docs/abc12345').title, 'Newer name');
+  assert.equal(migrated.get('https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345').title, 'Newer name');
 });
 
-test('legacy query-level renames collapse by path and keep the latest record', () => {
+test('unknown query-level renames and pins retain independent resource identity', () => {
   const baseUrl = 'https://dataleap-va.tiktok-row.net/dorado/instance';
   const firstUrl = `${baseUrl}?_instanceD_=first`;
   const latestUrl = `${baseUrl}?searchType=content&keyword=109477584`;
@@ -97,14 +115,12 @@ test('legacy query-level renames collapse by path and keep the latest record', (
     }]
   ]));
 
-  assert.deepEqual([...migrated], [[baseUrl, {
-    title: '最新实例名',
-    targetUrl: latestUrl,
-    updatedAt: 200
-  }]]);
+  assert.equal(migrated.size, 2);
+  assert.equal(migrated.get(firstUrl).title, '旧实例名');
+  assert.equal(migrated.get(`${baseUrl}?keyword=109477584&searchType=content`).title, '最新实例名');
   assert.deepEqual(
     [...normalizePinnedPageKeys([firstUrl, latestUrl])],
-    [baseUrl]
+    [firstUrl, `${baseUrl}?keyword=109477584&searchType=content`]
   );
 });
 
@@ -113,7 +129,7 @@ test('loading version 3 overrides persists the latest page-identity migration', 
   const migrationKey = 'deduped-history-title-overrides-migration';
   const baseUrl = 'https://example.com/projects/prj12345';
   const firstUrl = `${baseUrl}/tasks/task0001/overview`;
-  const latestUrl = `${baseUrl}/tasks/task0002/settings`;
+  const latestUrl = `${baseUrl}/tasks/task0002/inspector`;
   const values = {
     [migrationKey]: 3,
     [storageKey]: {
@@ -134,10 +150,11 @@ test('loading version 3 overrides persists the latest page-identity migration', 
   try {
     const overrides = await loadTitleOverrides();
 
-    assert.equal(overrides.size, 1);
-    assert.equal(overrides.get(baseUrl).title, '最新实例名');
-    assert.equal(values[migrationKey], 5);
-    assert.deepEqual(Object.keys(values[storageKey]), [baseUrl]);
+    assert.equal(overrides.size, 2);
+    assert.equal(overrides.get(firstUrl).title, '旧实例名');
+    assert.equal(overrides.get(latestUrl).title, '最新实例名');
+    assert.equal(values[migrationKey], 6);
+    assert.deepEqual(Object.keys(values[storageKey]), [firstUrl, latestUrl]);
   } finally {
     delete globalThis.chrome;
   }
@@ -169,8 +186,74 @@ test('loading version 4 overrides migrates Feishu tenant domains to one wiki ide
       targetUrl: renameUrl,
       updatedAt: 200
     }]]);
-    assert.equal(values[migrationKey], 5);
+    assert.equal(values[migrationKey], 6);
     assert.deepEqual(Object.keys(values[storageKey]), [canonicalKey]);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('version 5 broad keys migrate to their stored target and resolve collisions by update time', async () => {
+  const storageKey = 'deduped-history-title-overrides';
+  const migrationKey = 'deduped-history-title-overrides-migration';
+  const broadKey = 'https://example.com/projects/prj12345';
+  const targetUrl = `${broadKey}/tasks/task0002/overview`;
+  const values = {
+    [migrationKey]: 5,
+    [storageKey]: {
+      [broadKey]: { title: '用户保留的名称', targetUrl, updatedAt: 200 },
+      [targetUrl]: { title: '较早的名称', targetUrl, updatedAt: 100 }
+    }
+  };
+  globalThis.chrome = createStorageChrome(values);
+  try {
+    const overrides = await loadTitleOverrides();
+    assert.deepEqual([...overrides], [[targetUrl, {
+      title: '用户保留的名称', targetUrl, updatedAt: 200
+    }]]);
+    assert.equal(values[migrationKey], 6);
+    assert.deepEqual(Object.keys(values[storageKey]), [targetUrl]);
+    assert.deepEqual(await loadTitleOverrides(), overrides);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('current-version reads and saves preserve a canonical redirect key distinct from its target', async () => {
+  const storageKey = 'deduped-history-title-overrides';
+  const canonicalKey = 'https://example.com/final';
+  const record = { title: '保留名称', targetUrl: 'https://example.com/legacy', updatedAt: 200 };
+  const values = {
+    'deduped-history-title-overrides-migration': 6,
+    [storageKey]: { [canonicalKey]: record }
+  };
+  globalThis.chrome = createStorageChrome(values);
+  try {
+    assert.deepEqual([...normalizePageTitleOverrideMap(values[storageKey])], [[canonicalKey, record]]);
+    assert.deepEqual([...(await loadTitleOverrides())], [[canonicalKey, record]]);
+    await saveTitleOverride('https://example.com/unrelated', '另一页');
+    assert.deepEqual(values[storageKey][canonicalKey], record);
+    assert.equal(values[storageKey][record.targetUrl], undefined);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('saving before the first read migrates existing version 5 names before marking version 6', async () => {
+  const storageKey = 'deduped-history-title-overrides';
+  const oldKey = 'https://example.com/projects/prj12345';
+  const targetUrl = `${oldKey}/tasks/task0002`;
+  const record = { title: '原有名称', targetUrl, updatedAt: 200 };
+  const values = {
+    'deduped-history-title-overrides-migration': 5,
+    [storageKey]: { [oldKey]: record }
+  };
+  globalThis.chrome = createStorageChrome(values);
+  try {
+    await saveTitleOverride('https://example.com/new', '新名称');
+    assert.deepEqual(values[storageKey][targetUrl], record);
+    assert.equal(values[storageKey][oldKey], undefined);
+    assert.equal(values['deduped-history-title-overrides-migration'], 6);
   } finally {
     delete globalThis.chrome;
   }
@@ -179,42 +262,43 @@ test('loading version 4 overrides migrates Feishu tenant domains to one wiki ide
 test('legacy pinned tab URLs migrate to one stable page key', () => {
   assert.deepEqual(
     [...normalizePinnedPageKeys([
-      'https://example.com/docs/abc12345/tools',
-      'https://example.com/docs/abc12345/settings'
+      'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/tools',
+      'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/inspector'
     ])],
-    ['https://example.com/docs/abc12345']
+    ['https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345']
   );
 });
 
 test('captured title records normalize valid titles and discard malformed entries', () => {
   assert.deepEqual(
-    [...normalizeCapturedTitleMap({
+    [...normalizeCapturedPageMap({
       'https://example.com/a': { title: '  Final   title  ', updatedAt: 200 },
       'https://example.com/b': { title: '', updatedAt: 100 },
       '': { title: 'Missing URL', updatedAt: 300 }
     })],
-    [['https://example.com/a', 'Final title']]
+    [['https://example.com/a', { title: 'Final title' }]]
   );
 });
 
 test('captured title records strip invisible Unicode format controls', () => {
   assert.deepEqual(
-    [...normalizeCapturedTitleMap({
+    [...normalizeCapturedPageMap({
       'https://example.com/a': {
         title: '\u2064\u200bAgent Node Replay 使用指南 - 飞书云文档',
         updatedAt: 200
       }
     })],
-    [['https://example.com/a', 'Agent Node Replay 使用指南 - 飞书云文档']]
+    [['https://example.com/a', { title: 'Agent Node Replay 使用指南 - 飞书云文档' }]]
   );
 });
 
-test('captured page records preserve the final URL after redirects', () => {
+test('captured page records preserve versioned redirect targets without exposing the storage marker', () => {
   assert.deepEqual(
     [...normalizeCapturedPageMap({
       'https://cloud.example.com/legacy': {
         title: 'Release',
         resolvedUrl: 'https://cloud.example.com/final',
+        resolutionVersion: 1,
         updatedAt: 200
       }
     })],
@@ -225,34 +309,64 @@ test('captured page records preserve the final URL after redirects', () => {
   );
 });
 
-test('captured title records skip storage updates when the title is unchanged', () => {
-  const stored = {
-    'https://example.com/doc/abc12345': {
+test('unversioned captured redirects lose their relationship but retain their titles', () => {
+  assert.deepEqual([...normalizeCapturedPageMap({
+    'https://example.com/old-alias': {
+      title: '保留捕获的标题', resolvedUrl: 'https://example.com/wrong-target', updatedAt: 100
+    }
+  })], [['https://example.com/old-alias', { title: '保留捕获的标题' }]]);
+});
+
+test('a newly verified redirect replaces an old unversioned relationship even with an unchanged title', async () => {
+  const alias = 'https://example.com/alias';
+  const finalUrl = 'https://example.com/final';
+  const values = {
+    [CAPTURED_PAGE_TITLES_STORAGE_KEY]: {
+      [alias]: { title: '标题', resolvedUrl: finalUrl, updatedAt: 100 }
+    }
+  };
+  let writes = 0;
+  globalThis.chrome = createStorageChrome(values, {}, { onSet() { writes += 1; } });
+  try {
+    await saveCapturedPageTitles([{ key: alias, title: '标题', resolvedUrl: finalUrl, updatedAt: 200 }]);
+    assert.deepEqual(values[CAPTURED_PAGE_TITLES_STORAGE_KEY][alias], {
+      title: '标题', resolvedUrl: finalUrl, resolutionVersion: 1, updatedAt: 200
+    });
+    assert.deepEqual([...normalizeCapturedPageMap(values[CAPTURED_PAGE_TITLES_STORAGE_KEY])], [
+      [alias, { title: '标题', resolvedUrl: finalUrl }]
+    ]);
+    await saveCapturedPageTitles([{ key: alias, title: '标题', resolvedUrl: finalUrl, updatedAt: 300 }]);
+    assert.equal(writes, 1);
+    assert.equal(values[CAPTURED_PAGE_TITLES_STORAGE_KEY][alias].updatedAt, 200);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('batch title capture skips unchanged records and persists changed titles', async () => {
+  const url = 'https://example.com/doc/abc12345';
+  const values = { [CAPTURED_PAGE_TITLES_STORAGE_KEY]: {
+    [url]: {
       title: 'Final title',
       updatedAt: 100
     }
-  };
-
-  const unchanged = updateCapturedTitleRecords(
-    stored,
-    'https://example.com/doc/abc12345',
-    'Final title',
-    200
-  );
-  const renamed = updateCapturedTitleRecords(
-    stored,
-    'https://example.com/doc/abc12345',
-    'Renamed title',
-    200
-  );
-
-  assert.equal(unchanged.changed, false);
-  assert.equal(unchanged.records.get('https://example.com/doc/abc12345').updatedAt, 100);
-  assert.equal(renamed.changed, true);
-  assert.deepEqual(renamed.records.get('https://example.com/doc/abc12345'), {
-    title: 'Renamed title',
-    updatedAt: 200
+  } };
+  let writes = 0;
+  globalThis.chrome = createStorageChrome(values, {}, {
+    onSet() { writes += 1; }
   });
+  try {
+    await saveCapturedPageTitles([{ key: url, title: 'Final title', updatedAt: 200 }]);
+    assert.equal(writes, 0);
+    assert.equal(values[CAPTURED_PAGE_TITLES_STORAGE_KEY][url].updatedAt, 100);
+    await saveCapturedPageTitles([{ key: url, title: 'Renamed title', updatedAt: 200 }]);
+    assert.equal(writes, 1);
+    assert.deepEqual(values[CAPTURED_PAGE_TITLES_STORAGE_KEY][url], {
+      title: 'Renamed title', updatedAt: 200
+    });
+  } finally {
+    delete globalThis.chrome;
+  }
 });
 
 test('captured navigation aliases are merged with one storage read and write', async () => {
@@ -285,8 +399,8 @@ test('captured navigation aliases are merged with one storage read and write', a
     assert.equal(capturedReads, 1);
     assert.equal(capturedWrites, 1);
     assert.deepEqual(values[CAPTURED_PAGE_TITLES_STORAGE_KEY], {
-      [firstAlias]: { title: 'Latest title', resolvedUrl: finalUrl, updatedAt: 200 },
-      [finalUrl]: { title: 'Final title', resolvedUrl: finalUrl, updatedAt: 100 },
+      [firstAlias]: { title: 'Latest title', resolvedUrl: finalUrl, resolutionVersion: 1, updatedAt: 200 },
+      [finalUrl]: { title: 'Final title', resolvedUrl: finalUrl, resolutionVersion: 1, updatedAt: 100 },
       [existingUrl]: { title: 'Existing', updatedAt: 50 }
     });
   } finally {
@@ -325,8 +439,8 @@ test('a stalled captured-title mutation does not block a title override save', a
     }]);
     await capturedReadStarted;
 
-    const renameSave = saveTitleOverride('https://example.com/docs/abc12345', 'Renamed', {
-      targetUrl: 'https://example.com/docs/abc12345',
+    const renameSave = saveTitleOverride('https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345', 'Renamed', {
+      targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345',
       updatedAt: 200
     });
     await Promise.race([
@@ -335,7 +449,7 @@ test('a stalled captured-title mutation does not block a title override save', a
     ]);
     await renameSave;
 
-    assert.equal(values['deduped-history-title-overrides']['https://example.com/docs/abc12345'].title, 'Renamed');
+    assert.equal(values['deduped-history-title-overrides']['https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345'].title, 'Renamed');
     releaseCapturedRead();
     releaseCapturedRead = null;
     await capturedSave;
@@ -351,32 +465,32 @@ test('concurrent title saves retain different pages and repeated page renames ke
 
   try {
     await Promise.all([
-      saveTitleOverride('https://example.com/docs/abc12345', 'Docs A', {
-        targetUrl: 'https://example.com/docs/abc12345/tools',
+      saveTitleOverride('https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345', 'Docs A', {
+        targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/tools',
         updatedAt: 100
       }),
-      saveTitleOverride('https://example.com/docs/xyz98765', 'Docs B', {
-        targetUrl: 'https://example.com/docs/xyz98765/tools',
+      saveTitleOverride('https://cloud-ttp-us.bytedance.net/tae/mcp_server/xyz98765', 'Docs B', {
+        targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/xyz98765/tools',
         updatedAt: 100
       })
     ]);
-    await saveTitleOverride('https://example.com/docs/abc12345', 'Docs A latest', {
-      targetUrl: 'https://example.com/docs/abc12345/settings',
+    await saveTitleOverride('https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345', 'Docs A latest', {
+      targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/inspector',
       updatedAt: 200
     });
-    await saveTitleOverride('https://example.com/docs/abc12345', 'Stale request', {
-      targetUrl: 'https://example.com/docs/abc12345/overview',
+    await saveTitleOverride('https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345', 'Stale request', {
+      targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/overview',
       updatedAt: 150
     });
 
     const overrides = await loadTitleOverrides();
     assert.equal(overrides.size, 2);
-    assert.deepEqual(overrides.get('https://example.com/docs/abc12345'), {
+    assert.deepEqual(overrides.get('https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345'), {
       title: 'Docs A latest',
-      targetUrl: 'https://example.com/docs/abc12345/settings',
+      targetUrl: 'https://cloud-ttp-us.bytedance.net/tae/mcp_server/abc12345/inspector',
       updatedAt: 200
     });
-    assert.equal(overrides.get('https://example.com/docs/xyz98765').title, 'Docs B');
+    assert.equal(overrides.get('https://cloud-ttp-us.bytedance.net/tae/mcp_server/xyz98765').title, 'Docs B');
   } finally {
     delete globalThis.chrome;
   }

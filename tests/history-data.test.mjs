@@ -2,78 +2,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  appendTimeExemptRenamedItems,
   DEFAULT_HISTORY_PAGE_SIZE,
   searchChromeHistory
 } from '../src/history-data.js';
-
-test('renamed pages outside the selected time window are restored from real visits', async () => {
-  const oldUrl = 'https://example.com/docs/old';
-  const oldItem = historyItem(oldUrl, 300, 3);
-  const result = await appendTimeExemptRenamedItems(
-    [historyItem('https://example.com/recent', 900, 2)],
-    new Map([[
-      oldUrl,
-      { title: '长期文档', targetUrl: oldUrl, updatedAt: 500 }
-    ]]),
-    { allHistoryItems: [oldItem] }
-  );
-
-  assert.equal(result.length, 2);
-  assert.equal(result[1], oldItem);
-});
-
-test('renamed pages already represented in the window are not loaded or duplicated', async () => {
-  const windowItem = historyItem(
-    'https://example.com/report?activeTab=summary&timestamp=100',
-    900,
-    2
-  );
-  const windowItems = [windowItem];
-  const result = await appendTimeExemptRenamedItems(
-    windowItems,
-    new Map([[
-      'https://example.com/report',
-      {
-        title: '报告',
-        targetUrl: 'https://example.com/report?activeTab=details&timestamp=200',
-        updatedAt: 500
-      }
-    ]]),
-    { allHistoryItems: [windowItem] }
-  );
-
-  assert.equal(result, windowItems);
-});
-
-test('renamed pages are restored through another URL alias with the same page identity', async () => {
-  const storedTarget = 'https://example.com/report/abc12345/overview';
-  const existingAlias = 'https://example.com/report/abc12345/settings?tab=members';
-  const aliasItem = historyItem(existingAlias, 300, 4);
-  const result = await appendTimeExemptRenamedItems(
-    [],
-    new Map([[
-      'https://example.com/report/abc12345',
-      { title: '长期报告', targetUrl: storedTarget, updatedAt: 500 }
-    ]]),
-    { allHistoryItems: [aliasItem] }
-  );
-
-  assert.deepEqual(result.map((item) => item.url), [existingAlias]);
-  assert.equal(result[0], aliasItem);
-});
-
-test('renamed pages deleted from all-time history are not restored', async () => {
-  const deletedUrl = 'https://example.com/deleted';
-  const result = await appendTimeExemptRenamedItems(
-    [],
-    new Map([[deletedUrl, { title: '已删除', targetUrl: deletedUrl, updatedAt: 100 }]]),
-    { allHistoryItems: [] }
-  );
-
-  assert.deepEqual(result, []);
-});
-
 
 test('history search paginates with an endTime cursor and deduplicates URLs', async () => {
   const queries = [];

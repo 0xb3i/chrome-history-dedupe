@@ -2,37 +2,26 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
-  buildHistoryRangeIndexes,
-  getHistoryRangeStartTime,
-  HISTORY_INDEX_ALGORITHM_VERSION,
-  HISTORY_INDEX_RANGES
+  buildHistoryIndex,
+  HISTORY_INDEX_ALGORITHM_VERSION
 } from '../src/history-index/derive.js';
 import { createHistoryIndexService } from '../src/history-index/service.js';
 
 const NOW = Date.UTC(2026, 7, 1, 12);
 const DAY = 24 * 60 * 60 * 1000;
 
-test('range indexes preserve time windows and time-exempt renamed pages', async () => {
+test('one full facts index includes both recent and old resources', async () => {
   const recent = historyItem('https://example.com/recent', NOW - DAY, 2);
-  const oldRenamed = historyItem('https://example.com/docs/abc12345', NOW - 60 * DAY, 4);
+  const oldDocument = historyItem('https://example.com/docs/abc12345', NOW - 60 * DAY, 4);
   const oldPlain = historyItem('https://example.com/plain', NOW - 60 * DAY, 3);
-  const indexes = await buildHistoryRangeIndexes([recent, oldRenamed, oldPlain], {
-    now: NOW,
-    titleOverrides: new Map([[
-      'https://example.com/docs/abc12345',
-      { title: '长期文档', targetUrl: oldRenamed.url, updatedAt: NOW }
-    ]]),
+  const indexes = await buildHistoryIndex([recent, oldDocument, oldPlain], {
     capturedPageTitles: new Map(),
     yieldControl: async () => {}
   });
 
-  assert.deepEqual(indexes.get('week').map((item) => item.url).sort(), [
-    oldRenamed.url,
-    recent.url
-  ].sort());
-  assert.equal(indexes.get('week').some((item) => item.url === oldPlain.url), false);
+  assert.deepEqual([...indexes.keys()], ['all']);
   assert.equal(indexes.get('all').length, 3);
-  assert.equal(getHistoryRangeStartTime('week', NOW), NOW - 7 * DAY);
+  assert.ok(indexes.get('all').every((item) => !item.isTitleRenamed));
 });
 
 test('large index builds yield to shortcut tasks before completing', async () => {
@@ -42,9 +31,7 @@ test('large index builds yield to shortcut tasks before completing', async () =>
     1
   ));
   let buildCompleted = false;
-  const build = buildHistoryRangeIndexes(items, {
-    now: NOW,
-    titleOverrides: new Map(),
+  const build = buildHistoryIndex(items, {
     capturedPageTitles: new Map(),
     batchSize: 250
   }).finally(() => {
@@ -61,7 +48,7 @@ test('large index builds yield to shortcut tasks before completing', async () =>
   assert.equal(indexes.get('all')[0].dedupeCount, 5000);
 });
 
-test('cooperative index stages checkpoint within a large range', async () => {
+test('cooperative index construction checkpoints within a large resource collection', async () => {
   const items = Array.from({ length: 1200 }, (_, index) => historyItem(
     `https://example.com/page/${index}`,
     NOW - index,
@@ -69,9 +56,7 @@ test('cooperative index stages checkpoint within a large range', async () => {
   ));
   let yieldCount = 0;
 
-  await buildHistoryRangeIndexes(items, {
-    now: NOW,
-    titleOverrides: new Map(),
+  await buildHistoryIndex(items, {
     capturedPageTitles: new Map(),
     batchSize: 100,
     yieldControl: async () => {
@@ -79,7 +64,7 @@ test('cooperative index stages checkpoint within a large range', async () => {
     }
   });
 
-  assert.ok(yieldCount > HISTORY_INDEX_RANGES.length * 5);
+  assert.ok(yieldCount > 1);
 });
 
 test('ready persistent index never queries Chrome history', async () => {
@@ -96,7 +81,7 @@ test('ready persistent index never queries Chrome history', async () => {
 
   await service.ensureReady();
   assert.equal(searchCalls, 0);
-  assert.equal((await store.loadRange('week')).pageItems.length, 1);
+  assert.equal((await store.loadRange('all')).pageItems.length, 1);
 });
 
 test('visited events replace raw URLs and rebuild without calling History API', async () => {
@@ -117,7 +102,7 @@ test('visited events replace raw URLs and rebuild without calling History API', 
 
   assert.equal(searchCalls, 0);
   assert.equal((await store.loadRawSnapshot()).items.length, 1);
-  assert.equal((await store.loadRange('week')).pageItems[0].totalVisitCount, 7);
+  assert.equal((await store.loadRange('all')).pageItems[0].totalVisitCount, 7);
 });
 
 test('history deletion atomically publishes an index without the removed URL', async () => {
@@ -135,28 +120,29 @@ test('history deletion atomically publishes an index without the removed URL', a
   );
 });
 
-test('derived title rebuild uses raw persistence and does not query Chrome history', async () => {
+test('captured-title rebuild uses raw persistence and does not query Chrome history', async () => {
   const item = historyItem('https://example.com/docs/abc12345', NOW, 2);
   const store = createMemoryIndexStore([item]);
   await seedReadyIndex(store);
   let searchCalls = 0;
-  let titleOverrides = new Map();
+  let capturedPageTitles = new Map();
   const service = createService(store, {
     searchHistory: async () => {
       searchCalls += 1;
       return [];
     },
-    loadTitleOverrides: async () => titleOverrides
+    loadCapturedPageTitles: async () => capturedPageTitles
   });
-  titleOverrides = new Map([[
+  capturedPageTitles = new Map([[
     item.url,
-    { title: '大模型知识面试一本通', targetUrl: item.url, updatedAt: NOW }
+    { title: '大模型知识面试一本通' }
   ]]);
 
   await service.rebuildDerived({ immediate: true });
 
   assert.equal(searchCalls, 0);
-  assert.equal((await store.loadRange('week')).pageItems[0].title, '大模型知识面试一本通');
+  assert.equal((await store.loadRange('all')).pageItems[0].title, '大模型知识面试一本通');
+  assert.equal((await store.loadRange('all')).pageItems[0].isTitleRenamed, false);
 });
 
 test('derived rebuilds triggered during an active build collapse into one latest trailing build', async () => {
@@ -165,18 +151,18 @@ test('derived rebuilds triggered during an active build collapse into one latest
   await seedReadyIndex(store);
   let releaseFirstBuild;
   let signalFirstBuildStarted;
-  let loadOverrideCalls = 0;
-  let titleOverrides = new Map([[
+  let loadCapturedCalls = 0;
+  let capturedPageTitles = new Map([[
     item.url,
-    { title: '首次构建', targetUrl: item.url, updatedAt: NOW }
+    { title: '首次捕获' }
   ]]);
   const firstBuildStarted = new Promise((resolve) => { signalFirstBuildStarted = resolve; });
   const firstBuildGate = new Promise((resolve) => { releaseFirstBuild = resolve; });
   const service = createService(store, {
-    loadTitleOverrides: async () => {
-      loadOverrideCalls += 1;
-      const snapshot = titleOverrides;
-      if (loadOverrideCalls === 1) {
+    loadCapturedPageTitles: async () => {
+      loadCapturedCalls += 1;
+      const snapshot = capturedPageTitles;
+      if (loadCapturedCalls === 1) {
         signalFirstBuildStarted();
         await firstBuildGate;
       }
@@ -186,9 +172,9 @@ test('derived rebuilds triggered during an active build collapse into one latest
 
   const firstBuild = service.rebuildDerived({ immediate: true });
   await firstBuildStarted;
-  titleOverrides = new Map([[
+  capturedPageTitles = new Map([[
     item.url,
-    { title: '最新命名', targetUrl: item.url, updatedAt: NOW + 1 }
+    { title: '最新捕获' }
   ]]);
   const trailingRequests = Array.from(
     { length: 100 },
@@ -197,8 +183,8 @@ test('derived rebuilds triggered during an active build collapse into one latest
   releaseFirstBuild();
   await Promise.all([firstBuild, ...trailingRequests]);
 
-  assert.equal(loadOverrideCalls, 2);
-  assert.equal((await store.loadRange('week')).pageItems[0].title, '最新命名');
+  assert.equal(loadCapturedCalls, 2);
+  assert.equal((await store.loadRange('all')).pageItems[0].title, '最新捕获');
 });
 
 test('background calibration keeps the committed generation readable until completion', async () => {
@@ -266,8 +252,7 @@ function createService(store, options = {}) {
   return createHistoryIndexService({
     store,
     searchHistory: options.searchHistory ?? (async () => []),
-    loadTitleOverrides: options.loadTitleOverrides ?? (async () => new Map()),
-    loadCapturedPageTitles: async () => new Map(),
+    loadCapturedPageTitles: options.loadCapturedPageTitles ?? (async () => new Map()),
     now: options.now ?? (() => NOW),
     eventBatchMs: 0,
     yieldControl: async () => {}
@@ -276,9 +261,7 @@ function createService(store, options = {}) {
 
 async function seedReadyIndex(store) {
   const { items, rawRevision } = await store.loadRawSnapshot();
-  const indexes = await buildHistoryRangeIndexes(items, {
-    now: NOW,
-    titleOverrides: new Map(),
+  const indexes = await buildHistoryIndex(items, {
     capturedPageTitles: new Map(),
     yieldControl: async () => {}
   });
