@@ -58,12 +58,12 @@ test('popup has a fixed measurement width and vertical scrolling', () => {
   assert.match(popupHtml, /<html class="popup-root" lang="zh-CN">/);
   assert.match(css, /\.popup-root \{[^}]*width: 580px;[^}]*min-width: 580px;[^}]*overflow: hidden;/);
   assert.match(css, /\.popup-body \{[^}]*width: 580px;[^}]*max-height: 560px;[^}]*overflow-x: hidden;[^}]*overflow-y: auto;/);
-  assert.match(css, /\.controls \{[^}]*grid-template-columns: minmax\(0, 1fr\) 120px auto;/);
-  assert.match(css, /\.popup-controls \{[^}]*padding: 8px;/);
+  assert.match(css, /\.controls \{[^}]*grid-template-columns: minmax\(0, 1fr\) 120px 124px auto;/);
+  assert.match(css, /\.popup-controls \{[^}]*padding: 0;[^}]*border: 0;/);
 });
 
 test('result rows keep dividers and clip long titles before action buttons', () => {
-  assert.ok(css.includes('.results > .result-item + .result-item'));
+  assert.ok(css.includes('.results > li + li'));
   assert.ok(css.includes('border-top: 1px solid var(--line);'));
   assert.match(css, /\.result-item \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
   assert.match(css, /\.result-content \{[^}]*min-width: 0;/);
@@ -73,28 +73,11 @@ test('result rows keep dividers and clip long titles before action buttons', () 
   assert.ok(css.includes('.popup-results .result-url'));
 });
 
-test('group containers keep rounded corners filled and clip row backgrounds', () => {
+test('result containers keep rounded corners filled and clip row backgrounds', () => {
   assert.match(css, /\.results \{[^}]*background: var\(--surface\);/);
   assert.match(css, /\.results \{[^}]*border-radius: var\(--radius\);/);
   assert.match(css, /\.results \{[^}]*overflow: hidden;/);
-  assert.match(css, /\.result-group \{[^}]*background: var\(--surface\);/);
-  assert.match(css, /\.result-group \{[^}]*overflow: hidden;/);
-  assert.match(css, /\.result-group:first-child \{[^}]*border-top-left-radius: var\(--radius\);/);
-  assert.match(css, /\.result-group:last-child \{[^}]*border-bottom-right-radius: var\(--radius\);/);
   assert.match(css, /\.popup-results \{[^}]*overflow: hidden;/);
-});
-
-test('expanded same-title links use bounded comparison rows and an accessible detail dialog', () => {
-  assert.ok(historyPageJs.includes('describeLinkDifferences(entry.items)'));
-  assert.ok(historyPageJs.includes('title.href = item.url'));
-  assert.ok(historyPageJs.includes("inspect.setAttribute('aria-haspopup', 'dialog')"));
-  assert.ok(historyPageJs.includes("dialog.setAttribute('aria-label', '链接详情')"));
-  assert.ok(historyPageJs.includes("dialog.addEventListener('close', () => dialog.remove()"));
-  assert.doesNotMatch(historyPageJs, /title\.textContent = variant \? item\.url/);
-  assert.match(css, /\.title-group-list > \.result-variant \{[^}]*height: 68px;/);
-  assert.match(css, /\.result-variant \.result-content \{[^}]*grid-template-rows: 22px 18px;/);
-  assert.match(css, /\.link-difference-label,\s*\.link-difference-value \{[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/);
-  assert.match(css, /\.link-details-dialog dd \{[^}]*white-space: pre-wrap;[^}]*overflow-wrap: anywhere;/);
 });
 
 test('search clear control uses the flat Ant allowClear affordance', () => {
@@ -108,7 +91,7 @@ test('search clear control uses the flat Ant allowClear affordance', () => {
 });
 
 test('result actions expose icon labels and pressed-state affordances', () => {
-  for (const label of ['修改网页名', '修改分组名']) {
+  for (const label of ['修改网页名']) {
     assert.ok(historyPageJs.includes(`button.title = '${label}'`));
   }
   assert.ok(historyPageJs.includes("button.setAttribute('aria-label', label)"));
@@ -120,10 +103,9 @@ test('result actions expose icon labels and pressed-state affordances', () => {
 
 test('renamed tags stay compact and result rows do not select text accidentally', () => {
   assert.ok(historyPageJs.includes("tag.textContent = '已重命名'"));
-  assert.match(css, /\.renamed-tag \{[^}]*background: var\(--accent-tint\);/);
-  assert.match(css, /\.renamed-tag \{[^}]*color: var\(--accent-strong\);/);
+  assert.match(css, /\.renamed-tag \{[^}]*background: transparent;/);
+  assert.match(css, /\.renamed-tag \{[^}]*color: var\(--subtle\);/);
   assert.doesNotMatch(css, /\.result-item-renamed/);
-  assert.match(css, /\.result-group-summary \{[^}]*user-select: none;/);
   assert.match(css, /\.result-item \{[^}]*user-select: none;/);
 });
 

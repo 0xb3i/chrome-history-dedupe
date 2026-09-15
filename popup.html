@@ -21,7 +21,7 @@
       <form class="controls popup-controls" id="search-form">
         <label class="field">
           <span class="visually-hidden">搜索历史记录</span>
-          <input id="query" type="search" placeholder="搜索历史记录" autocomplete="off" autofocus>
+          <input id="query" type="search" placeholder="输入标题或曾用名，即时搜索" autocomplete="off" autofocus>
         </label>
 
         <label class="field">
@@ -38,11 +38,11 @@
         <button class="primary-button" type="submit">搜索</button>
       </form>
 
-      <div class="status-line">
-        <span id="status-pill">待搜索</span>
+      <div class="status-line visually-hidden">
+        <span id="status-pill" role="status">待搜索</span>
       </div>
 
-      <section class="summary" id="summary" aria-live="polite"></section>
+      <section class="summary" id="summary" aria-label="结果筛选与显示"></section>
       <ol class="results popup-results" id="results"></ol>
       <section class="empty-state" id="empty-state">输入关键词或直接搜索最近历史。</section>
     </main>

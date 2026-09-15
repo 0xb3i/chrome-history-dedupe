@@ -1,20 +1,70 @@
 import { getPageIdentityKey } from './page-identity.js';
-import { normalizeSearchRange } from './history-utils.js';
+import { normalizeSearchRange, normalizeSortOrder } from './history-utils.js';
 
 export const PINNED_URLS_STORAGE_KEY = 'deduped-history-pinned-urls';
 export const TITLE_OVERRIDES_STORAGE_KEY = 'deduped-history-title-overrides';
 export const GROUP_NAME_OVERRIDES_STORAGE_KEY = 'deduped-history-group-name-overrides';
 export const RENAME_DRAFTS_STORAGE_KEY = 'deduped-history-rename-drafts';
 export const LAST_SEARCH_STATE_STORAGE_KEY = 'deduped-history-last-search-state';
+export const HISTORY_PAGE_SEARCH_STATE_STORAGE_KEY = 'deduped-history-page-last-search-state';
 export const TITLE_OVERRIDES_MIGRATION_STORAGE_KEY = 'deduped-history-title-overrides-migration';
 export const CAPTURED_PAGE_TITLES_STORAGE_KEY = 'deduped-history-captured-page-titles';
 
 const RENAME_DRAFT_TTL_MS = 15 * 60 * 1000;
 const MAX_CAPTURED_PAGE_TITLES = 5000;
 const CAPTURED_RESOLUTION_VERSION = 1;
-const TITLE_OVERRIDES_MIGRATION_VERSION = 6;
+export const TITLE_OVERRIDES_MIGRATION_VERSION = 6;
 const STORAGE_MUTATION_LOCK_NAME = 'deduped-history-storage-mutation';
 const storageMutationQueues = new Map();
+
+// Backup operations share the same locks as normal edits and publish all user
+// annotations in one storage write. Captured titles and indexes are rebuildable.
+const USER_DATA_LOCK_KEYS = [
+  TITLE_OVERRIDES_STORAGE_KEY, GROUP_NAME_OVERRIDES_STORAGE_KEY, PINNED_URLS_STORAGE_KEY
+].sort();
+
+function withUserDataLocks(callback, index = 0) {
+  return index === USER_DATA_LOCK_KEYS.length ? callback() :
+    withStorageMutationLock(USER_DATA_LOCK_KEYS[index], () => withUserDataLocks(callback, index + 1));
+}
+
+export async function readUserDataForBackup() {
+  return withUserDataLocks(async () => {
+    const [{ overrides }, groups, pins] = await Promise.all([
+      readTitleOverridesForMutation(), loadGroupNameOverrides(), loadPinnedUrlKeys()
+    ]);
+    return {
+      [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(overrides),
+      [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION,
+      [GROUP_NAME_OVERRIDES_STORAGE_KEY]: Object.fromEntries(groups),
+      [PINNED_URLS_STORAGE_KEY]: [...pins]
+    };
+  });
+}
+
+// Called after the backup boundary has validated the entire payload.
+export async function mergeUserDataFromBackup(data) {
+  return withUserDataLocks(async () => {
+    const [{ overrides: currentTitles }, currentGroups, currentPins] = await Promise.all([
+      readTitleOverridesForMutation(), loadGroupNameOverrides(), loadPinnedUrlKeys()
+    ]);
+    const titles = normalizePageTitleOverrideRecords(data[TITLE_OVERRIDES_STORAGE_KEY],
+      data[TITLE_OVERRIDES_MIGRATION_STORAGE_KEY] < TITLE_OVERRIDES_MIGRATION_VERSION);
+    const groups = normalizeTitleOverrideMap(data[GROUP_NAME_OVERRIDES_STORAGE_KEY]);
+    // Existing annotations win even if a backup carries a newer timestamp.
+    // An import must never silently undo a user's current edits.
+    for (const [key, value] of currentTitles) titles.set(key, value);
+    for (const [key, value] of currentGroups) groups.set(key, value);
+    const pins = new Set([...currentPins, ...normalizePinnedPageKeys(data[PINNED_URLS_STORAGE_KEY])]);
+    await setStorageValues({
+      [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(titles),
+      [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION,
+      [GROUP_NAME_OVERRIDES_STORAGE_KEY]: Object.fromEntries(groups),
+      [PINNED_URLS_STORAGE_KEY]: [...pins]
+    });
+    return { titles: titles.size, groups: groups.size, pins: pins.size };
+  });
+}
 
 export async function loadPinnedUrlKeys() {
   const storedValue = await getStorageValue(PINNED_URLS_STORAGE_KEY, []);
@@ -129,13 +179,15 @@ export async function loadGroupNameOverrides() {
   return normalizeTitleOverrideMap(storedValue);
 }
 
-export async function loadLastSearchState() {
-  const storedValue = await getStorageValue(LAST_SEARCH_STATE_STORAGE_KEY, null);
+export async function loadLastSearchState(view = 'popup') {
+  const key = view === 'history' ? HISTORY_PAGE_SEARCH_STATE_STORAGE_KEY : LAST_SEARCH_STATE_STORAGE_KEY;
+  const storedValue = await getStorageValue(key, null);
   return storedValue ? normalizeLastSearchState(storedValue) : null;
 }
 
-export async function saveLastSearchState(state) {
-  await setStorageValue(LAST_SEARCH_STATE_STORAGE_KEY, normalizeLastSearchState(state));
+export async function saveLastSearchState(state, view = 'popup') {
+  const key = view === 'history' ? HISTORY_PAGE_SEARCH_STATE_STORAGE_KEY : LAST_SEARCH_STATE_STORAGE_KEY;
+  await setStorageValue(key, normalizeLastSearchState(state));
 }
 
 export async function saveGroupNameOverride(key, name) {
@@ -350,6 +402,7 @@ export function normalizeLastSearchState(value) {
   return {
     query,
     range: normalizeSearchRange(value?.range),
+    sortOrder: normalizeSortOrder(value?.sortOrder),
     showRenamedOnly,
     showMinimalMode
   };

@@ -13,13 +13,21 @@
           <h1>历史记录</h1>
           <span class="version-badge" id="app-version"></span>
         </div>
-        <button class="shortcut-link" id="shortcut-settings" type="button">快捷键</button>
+        <div class="topbar-actions">
+          <div class="user-data-controls" id="user-data-controls" aria-label="备份与恢复">
+            <button class="shortcut-link" id="export-user-data" type="button" title="导出重命名、分组名称和置顶">备份</button>
+            <button class="shortcut-link" id="import-user-data" type="button" title="从备份恢复，保留现有名称">恢复</button>
+            <input id="user-data-file" type="file" accept=".json,application/json" aria-label="选择备份文件" hidden>
+          </div>
+          <button class="shortcut-link" id="shortcut-settings" type="button">快捷键</button>
+        </div>
       </header>
+      <p class="user-data-status" id="user-data-status" role="status" aria-live="polite" aria-atomic="true" hidden></p>
 
       <form class="controls" id="search-form">
         <label class="field">
           <span class="visually-hidden">搜索历史记录</span>
-          <input id="query" type="search" placeholder="搜索历史记录" autocomplete="off" autofocus>
+          <input id="query" type="search" placeholder="输入标题或曾用名，即时搜索" autocomplete="off" autofocus>
         </label>
 
         <label class="field">
@@ -27,20 +35,20 @@
           <select id="range">
             <option value="day">24 小时</option>
             <option value="week">7 天</option>
-            <option value="month" selected>30 天</option>
+            <option value="month">30 天</option>
             <option value="quarter">90 天</option>
-            <option value="all">全部</option>
+            <option value="all" selected>全部</option>
           </select>
         </label>
 
         <button class="primary-button" type="submit">搜索</button>
       </form>
 
-      <div class="status-line">
-        <span id="status-pill">待搜索</span>
+      <div class="status-line visually-hidden">
+        <span id="status-pill" role="status">待搜索</span>
       </div>
 
-      <section class="summary" id="summary" aria-live="polite"></section>
+      <section class="summary" id="summary" aria-label="结果筛选与显示"></section>
       <ol class="results" id="results"></ol>
       <section class="empty-state" id="empty-state">输入关键词或直接搜索最近历史。</section>
     </main>

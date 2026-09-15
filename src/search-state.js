@@ -18,7 +18,7 @@ export function createSearchState({ loadIndex, ensureIndex, onChange, now = Date
       (item) => item.isTitleRenamed || Number(item.lastVisitTime ?? 0) >= startTime
     );
     snapshot = {
-      query, range, revision: index.revision,
+      query, range, rangeStartTime: startTime, revision: index.revision,
       pageItemCount: rangeItems.length,
       matchedItems: filterHistoryItemsByQuery(rangeItems, query)
     };

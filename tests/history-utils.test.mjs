@@ -4,14 +4,18 @@ import test from 'node:test';
 import {
   applyCapturedTitlesToItems,
   applyPinnedStateToGroups,
+  compareHistoryItemsByVisits,
+  compareHistoryItems,
   dedupeHistoryItems,
   filterHistoryItemsByQuery,
   formatHistoryUrlForGroup,
   getHistoryItemCapturedTitleKey,
+  getHistoryItemComparator,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
   groupHistoryItems,
   normalizeHistoryKey,
+  normalizeSortOrder,
   prepareHistoryItemsForSearch
 } from '../src/history-utils.js';
 import { projectPageItems } from '../src/history-index/project.js';
@@ -22,6 +26,92 @@ function projectHistoryItems(items, overrides = new Map()) {
   const pageItems = dedupeHistoryItems(urlItems, 'page-family');
   return projectPageItems(pageItems, normalizePageTitleOverrideMap(overrides));
 }
+
+test('usage ranking orders lifetime visits, recency and stable keys without search preferences', () => {
+  const items = Object.freeze([
+    Object.freeze({ url: 'https://example.com/low', totalVisitCount: 1, lastVisitTime: 999,
+      searchMatch: { score: 500 }, isPinned: true }),
+    Object.freeze({ url: 'https://example.com/high-old', totalVisitCount: '10', lastVisitTime: 100 }),
+    Object.freeze({ url: 'https://example.com/high-b', visitCount: 10, lastVisitTime: 200 }),
+    Object.freeze({ url: 'https://example.com/high-a', totalVisitCount: 10, visitCount: 999, lastVisitTime: 200 }),
+    Object.freeze({ url: 'https://example.com/zero', totalVisitCount: 0, visitCount: 999 }),
+    Object.freeze({ url: 'https://example.com/missing' })
+  ]);
+  const sorted = [...items].sort(compareHistoryItemsByVisits);
+  assert.deepEqual(sorted.map((item) => item.url.split('/').at(-1)),
+    ['high-a', 'high-b', 'high-old', 'low', 'missing', 'zero']);
+  assert.equal(items[0].url, 'https://example.com/low');
+});
+
+test('explicit sorting uses visits, recency or natural display names while preserving pin order', () => {
+  const items = [
+    { id: 'match', title: 'Zulu', visitCount: 1, lastVisitTime: 10, searchMatch: { score: 100 } },
+    { id: 'rename', title: 'Beta', visitCount: 2, lastVisitTime: 20, isTitleRenamed: true },
+    { id: 'heavy', title: 'Agent 10', totalVisitCount: 100, visitCount: 1, lastVisitTime: 30 },
+    { id: 'new', title: 'agent 2', visitCount: 3, lastVisitTime: 100 },
+    { id: 'pin-second', title: 'A', visitCount: 999, lastVisitTime: 999, isPinned: true, pinOrder: 1 },
+    { id: 'pin-first', title: 'Z', visitCount: 0, lastVisitTime: 0, isPinned: true, pinOrder: 0 }
+  ].map((item) => Object.freeze({ ...item, url: `https://example.com/${item.id}` }));
+  const expected = {
+    default: ['match', 'rename', 'heavy', 'new'],
+    visits: ['heavy', 'new', 'rename', 'match'],
+    recent: ['new', 'heavy', 'rename', 'match'],
+    name: ['new', 'heavy', 'rename', 'match']
+  };
+  for (const [sortOrder, ids] of Object.entries(expected)) {
+    for (const input of [items, [...items].reverse()]) {
+      assert.deepEqual([...input].sort(getHistoryItemComparator(sortOrder)).map((item) => item.id),
+        ['pin-first', 'pin-second', ...ids]);
+    }
+  }
+  for (const invalid of [undefined, null, '', 'unknown', 'toString', {}]) {
+    assert.equal(normalizeSortOrder(invalid), 'default');
+    assert.equal(getHistoryItemComparator(invalid), compareHistoryItems);
+  }
+});
+
+test('name sorting uses Chinese collation and resolves equal names by visits and stable keys', () => {
+  const items = [
+    { id: 'z', title: '阿里', visitCount: 2, lastVisitTime: 999 },
+    { id: 'a', title: '阿里', visitCount: 2, lastVisitTime: 1 },
+    { id: 'heavy', title: '阿里', totalVisitCount: 3 },
+    { id: 'baidu', title: '百度', visitCount: 999 },
+    { id: 'numeric-ten', title: '版本 10' },
+    { id: 'numeric-two', title: '版本 2' }
+  ].map((item) => ({ ...item, url: `https://example.com/${item.id}` }));
+  for (const input of [items, [...items].reverse()]) {
+    assert.deepEqual(input.sort(getHistoryItemComparator('name')).map((item) => item.id),
+      ['heavy', 'a', 'z', 'baidu', 'numeric-two', 'numeric-ten']);
+  }
+  assert.ok(getHistoryItemComparator('name')(
+    { title: '', url: 'https://a.example/' }, { title: 'https://b.example/' }
+  ) < 0);
+});
+
+test('each sort order ranks groups by their best member and reapplies the same order after unpinning', () => {
+  const items = [
+    { id: 'a-heavy', url: 'https://a.example/heavy', title: 'Beta', totalVisitCount: 100, lastVisitTime: 10 },
+    { id: 'a-name', url: 'https://a.example/name', title: 'Alpha', totalVisitCount: 1, lastVisitTime: 20 },
+    { id: 'b-new', url: 'https://b.example/new', title: 'Gamma', totalVisitCount: 10, lastVisitTime: 100 },
+    { id: 'c-name', url: 'https://c.example/name', title: 'Aardvark', totalVisitCount: 50, lastVisitTime: 50 }
+  ];
+  const expected = {
+    visits: ['a-heavy', 'c-name', 'b-new'],
+    recent: ['b-new', 'c-name', 'a-name'],
+    name: ['c-name', 'a-name', 'b-new']
+  };
+  for (const [sortOrder, ids] of Object.entries(expected)) {
+    const groups = groupHistoryItems(items, sortOrder);
+    assert.deepEqual(groups.map((group) => group.items[0].id), ids);
+    const pinned = applyPinnedStateToGroups(groups,
+      ['https://b.example/new', 'https://a.example/name'], sortOrder);
+    assert.deepEqual(pinned.map((group) => group.items[0].id), ['b-new', 'a-name', 'c-name']);
+    const unpinned = applyPinnedStateToGroups(pinned, [], sortOrder);
+    assert.deepEqual(unpinned.map((group) => group.items[0].id), ids);
+    assert.deepEqual(unpinned.find((group) => group.key === 'a.example').items.map((item) => item.id),
+      sortOrder === 'visits' ? ['a-heavy', 'a-name'] : ['a-name', 'a-heavy']);
+  }
+});
 
 test('normalized URL mode collapses repeat visits and keeps the latest item', () => {
   const older = {
@@ -1437,7 +1527,7 @@ test('unpinned pages return to the original group sort order', () => {
 });
 
 
-test('one pin and rename ordering contract applies to browsing, search and renamed-only views', () => {
+test('pins retain their order while search relevance precedes rename and visit priority', () => {
   const items = [
     { id: 'plain', url: 'https://example.com/plain', title: 'shared', visitCount: 999 },
     { id: 'renamed-low', url: 'https://example.com/r-low', title: 'shared Zulu', isTitleRenamed: true, visitCount: 1 },
@@ -1449,7 +1539,7 @@ test('one pin and rename ordering contract applies to browsing, search and renam
   const rank = (visibleItems) => applyPinnedStateToGroups(groupHistoryItems(visibleItems), pins)[0].items.map((item) => item.id);
   const expected = ['pin-first', 'pin-second', 'renamed-high', 'renamed-low', 'plain'];
   assert.deepEqual(rank(items), expected);
-  assert.deepEqual(rank(filterHistoryItemsByQuery(items, 'shared')), expected);
+  assert.deepEqual(rank(filterHistoryItemsByQuery(items, 'shared')), ['pin-first', 'pin-second', 'plain', 'renamed-high', 'renamed-low']);
   assert.deepEqual(rank(items.filter((item) => item.isTitleRenamed)), expected.slice(0, -1));
   assert.deepEqual(rank([...items].reverse()), expected);
 });

@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   CAPTURED_PAGE_TITLES_STORAGE_KEY,
+  HISTORY_PAGE_SEARCH_STATE_STORAGE_KEY,
   LAST_SEARCH_STATE_STORAGE_KEY,
   loadLastSearchState,
   loadTitleOverrides,
@@ -21,12 +22,14 @@ test('last search state normalizes query and display preferences and the selecte
     normalizeLastSearchState({
       query: '  MEEGO   story  ',
       range: 'week',
+      sortOrder: 'recent',
       showRenamedOnly: true,
       showMinimalMode: true
     }),
     {
       query: 'MEEGO story',
       range: 'week',
+      sortOrder: 'recent',
       showRenamedOnly: true,
       showMinimalMode: true
     }
@@ -37,6 +40,7 @@ test('last search state defaults missing or invalid ranges to all history', () =
   assert.deepEqual(normalizeLastSearchState({ query: 'MEEGO', range: 'forever' }), {
     query: 'MEEGO',
     range: 'all',
+    sortOrder: 'default',
     showRenamedOnly: false,
     showMinimalMode: false
   });
@@ -50,10 +54,67 @@ test('loading and saving search preferences preserves the selected range', async
   try {
     const loaded = await loadLastSearchState();
     assert.deepEqual(loaded, {
-      query: 'Old handbook', range: 'day', showRenamedOnly: false, showMinimalMode: true
+      query: 'Old handbook', range: 'day', sortOrder: 'default', showRenamedOnly: false, showMinimalMode: true
     });
     await saveLastSearchState({ ...loaded, range: 'week' });
     assert.deepEqual(values[LAST_SEARCH_STATE_STORAGE_KEY], { ...loaded, range: 'week' });
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('search sort preference survives storage round trips and invalid values use the default', async () => {
+  const values = {};
+  globalThis.chrome = createStorageChrome(values);
+  try {
+    for (const sortOrder of ['default', 'visits', 'recent', 'name']) {
+      await saveLastSearchState({ query: 'agent', sortOrder });
+      assert.equal((await loadLastSearchState()).sortOrder, sortOrder);
+      assert.equal(values[LAST_SEARCH_STATE_STORAGE_KEY].sortOrder, sortOrder);
+    }
+    await saveLastSearchState({ sortOrder: 'unknown' });
+    assert.equal((await loadLastSearchState()).sortOrder, 'default');
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('history page starts without search preferences even when the popup has saved state', async () => {
+  const popupState = normalizeLastSearchState({ query: 'agent', range: 'week', sortOrder: 'visits' });
+  const values = { [LAST_SEARCH_STATE_STORAGE_KEY]: popupState };
+  globalThis.chrome = createStorageChrome(values);
+  try {
+    assert.equal(await loadLastSearchState('history'), null);
+    assert.deepEqual(await loadLastSearchState(), popupState);
+    assert.equal(values[HISTORY_PAGE_SEARCH_STATE_STORAGE_KEY], undefined);
+  } finally {
+    delete globalThis.chrome;
+  }
+});
+
+test('history page and popup save independent queries, ranges, and sort preferences', async () => {
+  const values = {};
+  const popupState = normalizeLastSearchState({ query: 'agent', range: 'week', sortOrder: 'visits' });
+  const historyState = normalizeLastSearchState({ query: 'handbook', range: 'all', sortOrder: 'recent' });
+  globalThis.chrome = createStorageChrome(values);
+  try {
+    await saveLastSearchState(popupState);
+    await saveLastSearchState(historyState, 'history');
+    assert.deepEqual(await loadLastSearchState(), popupState);
+    assert.deepEqual(await loadLastSearchState('popup'), popupState);
+    assert.deepEqual(await loadLastSearchState('history'), historyState);
+    assert.deepEqual(values[LAST_SEARCH_STATE_STORAGE_KEY], popupState);
+    assert.deepEqual(values[HISTORY_PAGE_SEARCH_STATE_STORAGE_KEY], historyState);
+
+    const updatedPopup = { ...popupState, query: 'notes', range: 'day', sortOrder: 'name' };
+    await saveLastSearchState(updatedPopup, 'popup');
+    assert.deepEqual(await loadLastSearchState(), updatedPopup);
+    assert.deepEqual(await loadLastSearchState('history'), historyState);
+
+    const updatedHistory = { ...historyState, query: '', range: 'month', sortOrder: 'visits' };
+    await saveLastSearchState(updatedHistory, 'history');
+    assert.deepEqual(await loadLastSearchState('history'), updatedHistory);
+    assert.deepEqual(await loadLastSearchState(), updatedPopup);
   } finally {
     delete globalThis.chrome;
   }

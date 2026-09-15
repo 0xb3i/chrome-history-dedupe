@@ -38,98 +38,136 @@ function displayTitleKey(item) {
   return JSON.stringify([domain, title]);
 }
 
-// Presentation only: never use these summaries to merge identities or choose URLs.
-export function describeLinkDifferences(items) {
-  const parsed = items.map((item) => {
+// Labels explain a choice within this group; they never change resource identity,
+// navigation targets or ordering. Only fields needed to distinguish choices appear.
+export function describeLinkChoices(items) {
+  if (!items.length) return [];
+  const urls = items.map((item) => {
     try { return new URL(item.url); } catch { return null; }
   });
+  if (urls.some((url) => !url)) {
+    return items.map((item) => ({ label: String(item.url ?? ''), secondary: '' }));
+  }
+  const paths = relativePaths(urls.map((url) => url.pathname));
+  const hashPaths = urls.map((url) => url.hash.split('?')[0]);
+  const pathVaries = new Set(urls.map((url) => url.pathname)).size > 1;
+  const routeNames = mergeRequestNames(urls);
+  const choices = urls.map((_, index) => ({
+    label: pathVaries ? routeNames?.[index] || paths[index] || '页面入口' : '',
+    secondary: ''
+  }));
+  for (const indices of matchingChoices(choices)) {
+    const hashes = indices.map((index) => hashPaths[index]);
+    if (new Set(hashes).size < 2) continue;
+    const prefix = ['#!/', '#/'].find((candidate) => hashes.every((hash) => hash.startsWith(candidate)));
+    const labels = prefix
+      ? relativePaths(hashes.map((hash) => hash.slice(prefix.length - 1))).map((path) => `${prefix}${path}`)
+      : hashes.map((hash) => decodeDisplay(hash) || '无锚点');
+    indices.forEach((index, offset) => { choices[index].secondary = labels[offset]; });
+  }
+
   const fields = [];
-  const addField = (label, values, { name = label, secret = false, display = (value) => value } = {}) => {
-    const keys = values.map((value) => JSON.stringify(value));
-    const distinct = [...new Set(keys)];
-    if (distinct.length < 2) return;
-    const present = distinct.filter((key) => key !== 'null');
-    fields.push({ label, name, values, keys, present, secret, display });
-  };
-
-  let sharedAddress = '';
-  let sharedLabel = '共同地址';
-  if (parsed.length && parsed.every(Boolean)) {
-    const first = parsed[0];
-    const paths = parsed.map((url) => url.pathname.split('/'));
-    const commonEnd = paths[0].findIndex((segment, index) =>
-      paths.some((segments) => segments[index] !== segment));
-    const common = paths[0].slice(0, commonEnd < 0 ? paths[0].length : commonEnd).join('/');
-    const samePath = parsed.every((url) => url.pathname === first.pathname);
-    const sameOrigin = parsed.every((url) => url.origin === first.origin);
-    const sharedHost = parsed.every((url) => url.hostname === first.hostname) ? first.hostname : '';
-    sharedAddress = `${sameOrigin && first.origin !== 'null' ? first.origin : sharedHost}${samePath ? first.pathname : common + '/…'}`;
-    sharedLabel = samePath && sameOrigin ? '共同地址' : '共同路径';
-    addField('协议', parsed.map((url) => url.protocol));
-    addField('主机', parsed.map((url) => url.host));
-    addField('用户信息', parsed.map((url) => url.username || url.password
-      ? [url.username, url.password] : null), { secret: true });
-    addField('路径', parsed.map((url) => url.pathname), {
-      display: (value) => decodeDisplay(common && !samePath && value !== common ? `…${value.slice(common.length)}` : value)
-    });
-    const params = new Set(parsed.flatMap((url) => [...url.searchParams.keys()]));
-    for (const key of params) {
-      const secret = /(?:token|password|passwd|secret|credential|authorization|session|api[-_]?key)/i.test(key);
-      addField(secret ? '登录凭证' : key || '空参数名',
-        parsed.map((url) => url.searchParams.has(key) ? url.searchParams.getAll(key) : null),
-        { name: `参数 ${key || '（空名称）'}`, secret });
+  const addField = (name, values, secret = false) => {
+    if (new Set(values.map((value) => JSON.stringify(value))).size > 1) {
+      fields.push({ name, values, secret });
     }
-    addField('页面片段', parsed.map((url) => url.hash || null), { display: decodeDisplay });
-  }
-
-  // Preserve differences in encoding, ordering, or unparseable URLs too.
-  const signatures = new Map();
-  const ambiguous = items.some((item, index) => {
-    const signature = JSON.stringify(fields.map((field) => field.keys[index]));
-    if (signatures.has(signature)) return signatures.get(signature) !== item.url;
-    signatures.set(signature, item.url);
-    return false;
-  });
-  if (ambiguous) addField('地址写法', items.map((item) => item.url), { secret: true });
-
-  const credentials = fields.filter((field) => field.label === '登录凭证');
-  if (credentials.length > 1) credentials.forEach((field) => { field.label = field.name; });
-  for (const field of fields) {
-    const displayKeys = new Map();
-    field.entries = field.values.map((value, index) => {
-      const detail = value === null ? '未携带' : Array.isArray(value)
-        ? value.map((part) => part === '' ? '（空值）' : part).join(' / ') : value;
-      const display = value === null ? '无' : field.secret
-        ? `值 ${field.present.indexOf(field.keys[index]) + 1}`
-        : field.display(detail);
-      if (!displayKeys.has(display)) displayKeys.set(display, new Set());
-      displayKeys.get(display).add(field.keys[index]);
-      return { detail, display };
-    });
-    field.entries.forEach((entry, index) => {
-      const ordinal = field.present.indexOf(field.keys[index]) + 1;
-      entry.value = entry.display.length > 40
-        ? `${entry.display.slice(0, 18)}…${entry.display.slice(-8)} · 值 ${ordinal}`
-        : displayKeys.get(entry.display).size > 1 && field.values[index] !== null
-          ? `${entry.display} · 值 ${ordinal}` : entry.display;
-    });
-  }
-
-  return {
-    sharedAddress,
-    sharedLabel,
-    summary: fields.length ? `差异：${[...new Set(fields.map((field) => field.label))].join('、')}` : '地址相同',
-    variants: items.map((_, index) => ({
-      differences: fields.map((field) => ({
-        label: field.label,
-        name: field.name,
-        value: field.entries[index].value,
-        detail: field.entries[index].detail
-      }))
-    }))
   };
+  const addParams = (params, prefix = '') => {
+    const keys = [...new Set(params.flatMap((param) => [...param.keys()]))];
+    // Navigation controls and resource IDs are more useful than incidental state.
+    const priority = (key) => ({ tab: 0, view: 1, page: 2, id: 3 })[key.toLowerCase()] ?? (isCredential(key) ? 5 : 4);
+    keys.sort((a, b) => priority(a) - priority(b) || a.localeCompare(b));
+    for (const key of keys) {
+      addField(`${prefix}${key || '空参数名'}`,
+        params.map((param) => param.has(key) ? param.getAll(key) : null), isCredential(key));
+    }
+  };
+  addParams(urls.map((url) => url.searchParams));
+  addParams(urls.map((url) => {
+    const queryStart = url.hash.indexOf('?');
+    return new URLSearchParams(queryStart < 0 ? '' : url.hash.slice(queryStart + 1));
+  }), '片段参数 ');
+  addField('协议', urls.map((url) => url.protocol.slice(0, -1)));
+  addField('主机', urls.map((url) => url.host));
+  addField('访问凭证', urls.map((url) => url.username || url.password ? [url.username, url.password] : null), true);
+  // Decoding or a route name can hide differences in the original spelling.
+  addField('路径', urls.map((url) => url.pathname));
+  addField('锚点', hashPaths);
+
+  for (const field of fields) {
+    for (const indices of matchingChoices(choices)) {
+      if (new Set(indices.map((index) => JSON.stringify(field.values[index]))).size < 2) continue;
+      for (const index of indices) {
+        const text = `${field.name}：${fieldValue(field, index)}`;
+        choices[index].secondary = [choices[index].secondary, text].filter(Boolean).join('；');
+      }
+    }
+  }
+  // Equivalent encodings or parameter order may be the only remaining difference.
+  // Explain that honestly, without exposing credential values or inventing tabs.
+  for (const indices of matchingChoices(choices)) {
+    const spellings = [...new Set(indices.map((index) => items[index].url))].sort();
+    if (spellings.length < 2) continue;
+    const spellingNumbers = new Map(spellings.map((value, index) => [value, index + 1]));
+    for (const index of indices) {
+      choices[index].secondary = [choices[index].secondary,
+        `地址写法 ${spellingNumbers.get(items[index].url)}`].filter(Boolean).join('；');
+    }
+  }
+  return choices.map((choice, index) => {
+    if (choice.label) return choice;
+    return { label: choice.secondary || routeNames?.[index] || paths[index] || '页面入口', secondary: '' };
+  });
+}
+
+function relativePaths(paths) {
+  const segments = paths.map((path) => path.split('/'));
+  let common = 0;
+  while (segments.every((parts) => common < parts.length && parts[common] === segments[0][common])) common++;
+  return segments.map((parts) => decodeDisplay(parts.slice(common).join('/')));
+}
+
+function mergeRequestNames(urls) {
+  const routes = urls.map((url) => /^(code\.byted\.org|gitlab\.com)$/.test(url.hostname)
+    ? url.pathname.match(/^(.*\/merge_requests\/\d+)(\/.*)?$/) : null);
+  if (routes.some((route) => !route) ||
+    new Set(routes.map((route, index) => `${urls[index].origin}${route[1]}`)).size !== 1) return null;
+  const names = new Map([['', '概览'], ['/', '概览'], ['/diffs', '文件变更'], ['/commits', '提交记录']]);
+  return routes.map((route) => names.get(route[2] || '') || (route[2] || '').slice(1));
+}
+
+function matchingChoices(choices) {
+  const groups = new Map();
+  choices.forEach((choice, index) => {
+    const key = JSON.stringify([choice.label, choice.secondary]);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(index);
+  });
+  return [...groups.values()].filter((indices) => indices.length > 1);
+}
+
+function isCredential(key) {
+  return /token|password|passwd|secret|credential|authorization|session|api[-_]?key/i.test(key);
+}
+
+function fieldValue(field, index) {
+  const value = field.values[index];
+  if (value === null) return '未指定';
+  if (field.secret) {
+    // Number a credential field once for the entire group, not once per row.
+    field.valueNumbers ??= new Map(
+      [...new Set(field.values.filter((entry) => entry !== null).map((entry) => JSON.stringify(entry)))]
+        .sort().map((entry, offset) => [entry, offset + 1])
+    );
+    return `已隐藏 ${field.valueNumbers.get(JSON.stringify(value))}`;
+  }
+  if (Array.isArray(value)) {
+    // JSON preserves repeated values and separates empty strings from missing keys.
+    return value.length === 1 ? value[0] || '（空值）' : JSON.stringify(value);
+  }
+  return value || '（空值）';
 }
 
 function decodeDisplay(value) {
-  try { return decodeURIComponent(value); } catch { return value; }
+  try { return decodeURI(value); } catch { return value; }
 }

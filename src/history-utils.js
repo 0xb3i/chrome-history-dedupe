@@ -2,13 +2,17 @@ import {
   getPageIdentityKey,
   normalizeUrlKey
 } from './page-identity.js';
+import { createSearchQuery, matchSearchTitles, normalizeSearchText } from './search-match.js';
 
 const DEFAULT_MODE = 'normalized-url';
 const LOCAL_FILE_GROUP_KEY = '本地文件';
-const HAN_KEYWORD_PATTERN = /^\p{Script=Han}{3,}$/u;
-const MAX_HAN_SUBSEQUENCE_SKIPS = 4;
 const DEFAULT_COOPERATIVE_BATCH_SIZE = 1000;
 const HISTORY_RANGE_DAYS = { day: 1, week: 7, month: 30, quarter: 90, all: 0 };
+const NAME_COLLATOR = new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' });
+
+export function normalizeSortOrder(value) {
+  return ['default', 'visits', 'recent', 'name'].includes(value) ? value : 'default';
+}
 
 export function normalizeSearchRange(range) {
   return Object.hasOwn(HISTORY_RANGE_DAYS, range) ? range : 'all';
@@ -110,18 +114,19 @@ function finalizeDedupeBuckets(buckets) {
   });
 }
 
-export function groupHistoryItems(items) {
-  return sortHistoryGroups(collectHistoryGroups(items));
+export function groupHistoryItems(items, sortOrder = 'default') {
+  return sortHistoryGroups(collectHistoryGroups(items), sortOrder);
 }
 
 // All presentations use the same item order, and a group's best member decides
 // its rank. Aggregate group traffic remains metadata, never a second ranking rule.
-function sortHistoryGroups(groups) {
+function sortHistoryGroups(groups, sortOrder = 'default') {
+  const compare = getHistoryItemComparator(sortOrder);
   return groups.map((group) => ({
     ...group,
-    items: [...group.items].sort(compareHistoryItems)
+    items: [...group.items].sort(compare)
   })).sort((left, right) => (
-    compareHistoryItems(left.items[0], right.items[0]) || left.key.localeCompare(right.key)
+    compare(left.items[0], right.items[0]) || left.key.localeCompare(right.key)
   ));
 }
 
@@ -263,22 +268,17 @@ export async function applyCapturedTitlesToItemsCooperatively(
 }
 
 export function filterHistoryItemsByQuery(items, query) {
-  const queryKeywords = normalizeSearchText(query).split(' ').filter(Boolean);
+  const searchQuery = createSearchQuery(query);
 
-  if (queryKeywords.length === 0) {
+  if (searchQuery.keywords.length === 0) {
     return items;
   }
 
-  return items.filter((item) => {
-    const normalizedValues = getPreparedSearchTitles(item);
-    const searchableText = normalizedValues.join(' ');
-    return queryKeywords.every((keyword) => (
-      searchableText.includes(keyword) ||
-      normalizedValues.some((value) => matchesBoundedHanSubsequence(
-        value,
-        keyword
-      ))
-    ));
+  return items.flatMap((item) => {
+    const titles = getItemSearchableTitles(item);
+    const normalizedTitles = item.normalizedSearchTitles ?? titles.map(normalizeSearchText);
+    const searchMatch = matchSearchTitles(item.title, titles, normalizedTitles, searchQuery);
+    return searchMatch ? [{ ...item, searchMatch }] : [];
   });
 }
 
@@ -289,43 +289,7 @@ export function prepareHistoryItemsForSearch(items) {
   }));
 }
 
-function getPreparedSearchTitles(item) {
-  return Array.isArray(item?.normalizedSearchTitles)
-    ? item.normalizedSearchTitles
-    : getItemSearchableTitles(item).map(normalizeSearchText);
-}
-
-function matchesBoundedHanSubsequence(value, keyword) {
-  if (!HAN_KEYWORD_PATTERN.test(keyword)) {
-    return false;
-  }
-
-  for (let start = value.indexOf(keyword[0]); start >= 0; start = value.indexOf(keyword[0], start + 1)) {
-    let valueIndex = start + 1;
-    let keywordIndex = 1;
-    let skippedCount = 0;
-
-    while (valueIndex < value.length && keywordIndex < keyword.length) {
-      if (value[valueIndex] === keyword[keywordIndex]) {
-        keywordIndex += 1;
-      } else {
-        skippedCount += 1;
-        if (skippedCount > MAX_HAN_SUBSEQUENCE_SKIPS) {
-          break;
-        }
-      }
-      valueIndex += 1;
-    }
-
-    if (keywordIndex === keyword.length) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-export function applyPinnedStateToGroups(groups, pinnedKeys = new Set()) {
+export function applyPinnedStateToGroups(groups, pinnedKeys = new Set(), sortOrder = 'default') {
   const pinOrders = createPinOrders(pinnedKeys);
   return sortHistoryGroups(groups.map((group) => {
     const items = group.items.map((item) => {
@@ -344,7 +308,7 @@ export function applyPinnedStateToGroups(groups, pinnedKeys = new Set()) {
       };
     });
     return { ...group, items, pinnedCount: items.filter((item) => item.isPinned).length };
-  }));
+  }), sortOrder);
 }
 
 function createPinOrders(pinnedKeys) {
@@ -455,17 +419,48 @@ function getTotalVisitCount(item) {
   return Number(item?.totalVisitCount ?? item?.visitCount ?? 0);
 }
 
-// One ranking contract for candidates, members and groups in every display mode.
-function compareHistoryItems(left, right) {
+// Expanded same-title choices prioritize usage, independent of search relevance.
+export function compareHistoryItemsByVisits(left, right) {
+  const byCount = getTotalVisitCount(right) - getTotalVisitCount(left);
+  const byTime = getVisitTime(right) - getVisitTime(left);
+  return byCount || byTime || compareHistoryItemKeys(left, right);
+}
+
+export function compareHistoryItemsByRecency(left, right) {
+  return getVisitTime(right) - getVisitTime(left) || compareHistoryItemsByVisits(left, right);
+}
+
+function compareHistoryItemKeys(left, right) {
+  const leftKey = String(left?.dedupeKey ?? left?.url ?? '');
+  const rightKey = String(right?.dedupeKey ?? right?.url ?? '');
+  return leftKey.localeCompare(rightKey);
+}
+
+function compareHistoryItemPins(left, right) {
   const byPin = Number(Boolean(right?.isPinned)) - Number(Boolean(left?.isPinned));
   const byPinOrder = (left?.isPinned ? left.pinOrder ?? Infinity : Infinity) -
     (right?.isPinned ? right.pinOrder ?? Infinity : Infinity);
+  return byPin || byPinOrder || 0;
+}
+
+// Search results and groups apply explicit preferences before usage ranking.
+export function compareHistoryItems(left, right) {
+  const byMatch = Number(right?.searchMatch?.score ?? 0) - Number(left?.searchMatch?.score ?? 0);
   const byRename = Number(Boolean(right?.isTitleRenamed)) - Number(Boolean(left?.isTitleRenamed));
-  const byCount = getTotalVisitCount(right) - getTotalVisitCount(left);
-  const byTime = getVisitTime(right) - getVisitTime(left);
-  const leftKey = String(left?.dedupeKey ?? left?.url ?? '');
-  const rightKey = String(right?.dedupeKey ?? right?.url ?? '');
-  return byPin || byPinOrder || byRename || byCount || byTime || leftKey.localeCompare(rightKey);
+  return compareHistoryItemPins(left, right) || byMatch || byRename || compareHistoryItemsByVisits(left, right);
+}
+
+const HISTORY_ITEM_COMPARATORS = {
+  default: compareHistoryItems,
+  visits: (left, right) => compareHistoryItemPins(left, right) || compareHistoryItemsByVisits(left, right),
+  recent: (left, right) => compareHistoryItemPins(left, right) || compareHistoryItemsByRecency(left, right),
+  name: (left, right) => compareHistoryItemPins(left, right) ||
+    NAME_COLLATOR.compare(left?.title || left?.url || '(无标题)', right?.title || right?.url || '(无标题)') ||
+    getTotalVisitCount(right) - getTotalVisitCount(left) || compareHistoryItemKeys(left, right)
+};
+
+export function getHistoryItemComparator(sortOrder = 'default') {
+  return HISTORY_ITEM_COMPARATORS[normalizeSortOrder(sortOrder)];
 }
 
 function getGroupKey(item) {
@@ -519,15 +514,6 @@ function getUsableUrl(value) {
   } catch {
     return '';
   }
-}
-
-function normalizeSearchText(value) {
-  return String(value ?? '')
-    .normalize('NFKC')
-    .replace(/\p{Cf}+/gu, '')
-    .trim()
-    .replace(/\s+/g, ' ')
-    .toLowerCase();
 }
 
 function pickPreferredItem(current, candidate) {

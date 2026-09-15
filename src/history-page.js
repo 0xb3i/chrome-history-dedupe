@@ -1,9 +1,13 @@
 import {
   applyPinnedStateToGroups,
+  compareHistoryItemsByVisits,
+  compareHistoryItemsByRecency,
   formatHistoryUrlForGroup,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
-  groupHistoryItems
+  groupHistoryItems,
+  getHistoryItemComparator,
+  normalizeSortOrder
 } from './history-utils.js';
 import {
   deleteGroupNameOverride,
@@ -32,7 +36,9 @@ import {
 import { createSearchState } from './search-state.js';
 import { createRenameSession } from './rename-session.js';
 import { createHistoryPageInitializer } from './history-page-init.js';
-import { describeLinkDifferences, groupItemsByDisplayTitle } from './result-presentation.js';
+import { describeLinkChoices, groupItemsByDisplayTitle } from './result-presentation.js';
+import { createLiveSearch } from './live-search.js';
+import { initializeUserDataControls } from './user-data-controls.js';
 
 const SNAPSHOT_RENDER_DEBOUNCE_MS = 50;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -47,6 +53,13 @@ const summary = document.querySelector('#summary');
 const results = document.querySelector('#results');
 const emptyState = document.querySelector('#empty-state');
 const appVersion = document.querySelector('#app-version');
+const isPopup = document.body.classList.contains('popup-body');
+const searchView = isPopup ? 'popup' : 'history';
+const RESULT_PAGE_SIZE = isPopup ? 30 : 50;
+const TITLE_GROUP_PAGE_SIZE = 30;
+let resultLimit = RESULT_PAGE_SIZE;
+let renderedConditions = '';
+let searchPending = false;
 const renameSession = createRenameSession();
 const groupRenameSession = createRenameSession();
 const renameDialog = createRenameDialog();
@@ -59,9 +72,12 @@ let titleOverrides = new Map();
 let isInitialized = false;
 let showRenamedOnly = false;
 let showMinimalMode = false;
+let sortOrder = isPopup ? 'default' : 'recent';
+const editedDisplayPreferences = new Set();
+let pendingSearchPreferences = null;
 let searchSnapshot = null;
 let snapshotRenderTimer = null;
-const expandedTitleGroups = new Set();
+const expandedTitleGroups = new Map();
 const searchState = createSearchState({
   loadIndex: () => historyIndexStore.loadRange('all'),
   ensureIndex: async () => {
@@ -78,7 +94,7 @@ const pageInitializer = createHistoryPageInitializer({
   initialSearch: { query: queryInput.value, range: rangeSelect.value },
   load: async () => {
     const [pinnedKeys, groupNames, titles, lastSearchState] = await Promise.all([
-      loadPinnedUrlKeys(), loadGroupNameOverrides(), loadTitleOverrides(), loadLastSearchState()
+      loadPinnedUrlKeys(), loadGroupNameOverrides(), loadTitleOverrides(), loadLastSearchState(searchView)
     ]);
     return { pinnedKeys, groupNames, titles, lastSearchState };
   },
@@ -86,13 +102,24 @@ const pageInitializer = createHistoryPageInitializer({
     pinnedUrlKeys = preferences.pinnedKeys;
     groupNameOverrides = preferences.groupNames;
     titleOverrides = preferences.titles;
-    showRenamedOnly = Boolean(preferences.lastSearchState?.showRenamedOnly);
-    showMinimalMode = Boolean(preferences.lastSearchState?.showMinimalMode);
+    if (!editedDisplayPreferences.has('renamed')) showRenamedOnly = Boolean(preferences.lastSearchState?.showRenamedOnly);
+    if (!editedDisplayPreferences.has('minimal')) showMinimalMode = Boolean(preferences.lastSearchState?.showMinimalMode);
+    if (!editedDisplayPreferences.has('sort')) {
+      const savedSort = normalizeSortOrder(preferences.lastSearchState?.sortOrder);
+      sortOrder = !isPopup && savedSort === 'default' ? 'recent' : savedSort;
+    }
+    document.querySelector('#sort-order').value = sortOrder;
     syncMinimalModePresentation();
+    if (!isInitialized) {
+      addStorageChangeListener();
+      addHistoryIndexUpdateListener();
+    }
     isInitialized = true;
-    addStorageChangeListener();
-    addHistoryIndexUpdateListener();
     searchState.setTitleOverrides(titleOverrides);
+    if (pendingSearchPreferences) {
+      void rememberCurrentSearchState(pendingSearchPreferences);
+      pendingSearchPreferences = null;
+    }
   },
   restore(state) {
     queryInput.value = state.query || '';
@@ -102,6 +129,33 @@ const pageInitializer = createHistoryPageInitializer({
   search: (query, range) => searchState.search(query, range)
 });
 
+const liveSearch = createLiveSearch({
+  read: () => ({ query: queryInput.value, range: rangeSelect.value }),
+  search: runSearch,
+  markEdited: () => pageInitializer.markEdited(),
+  markSubmitted: () => pageInitializer.markSubmitted(),
+  onPending: () => {
+    searchPending = true;
+    results.setAttribute('aria-busy', 'true');
+    setStatus('等待输入完成');
+  }
+});
+
+results.addEventListener('toggle', () => updateCollapseControl(), true);
+document.addEventListener('click', (event) => {
+  const menu = summary.querySelector('.view-menu');
+  if (menu && !menu.contains(event.target)) menu.open = false;
+});
+document.addEventListener('keydown', (event) => {
+  const menu = summary.querySelector('.view-menu[open]');
+  if (event.key === 'Escape' && menu) {
+    menu.open = false;
+    menu.querySelector('summary').focus();
+  }
+});
+
+const historyDayFormatter = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'full' });
+const historyTimeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const currentYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   month: 'long',
   day: 'numeric',
@@ -112,15 +166,18 @@ const otherYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   dateStyle: 'medium',
   timeStyle: 'short'
 });
-queryInput.addEventListener('input', () => pageInitializer.markEdited());
+queryInput.addEventListener('input', (event) => liveSearch.input(event));
+queryInput.addEventListener('compositionstart', () => liveSearch.compositionStart());
+queryInput.addEventListener('compositionend', () => liveSearch.compositionEnd());
 rangeSelect.addEventListener('change', () => {
-  pageInitializer.markEdited();
   syncRangeSelect();
+  liveSearch.change();
 });
 setupRangeSelect();
+rangeSelect.closest('.field').after(createSortControl());
 form.addEventListener('submit', (event) => {
   event.preventDefault();
-  runSearch();
+  liveSearch.submit();
 });
 shortcutSettingsButton?.addEventListener('click', () => {
   globalThis.chrome?.tabs?.create?.({ url: 'chrome://extensions/shortcuts' });
@@ -128,6 +185,7 @@ shortcutSettingsButton?.addEventListener('click', () => {
 document.body.append(renameDialog.element);
 document.body.append(groupRenameDialog.element);
 renderRuntimeVersion();
+initializeUserDataControls(document);
 
 init();
 
@@ -144,19 +202,18 @@ function renderRuntimeVersion() {
 
 async function init() {
   try {
+    setLoading();
     await pageInitializer.initialize();
+    if (!searchState.snapshot) await liveSearch.submit();
 
     void requestHistoryIndex(HISTORY_INDEX_ENSURE_MESSAGE).catch(() => {});
   } catch (error) {
-    renderError(error);
+    renderError(error, () => init());
   }
 }
 
-async function runSearch() {
-  pageInitializer.markSubmitted();
+async function runSearch(query = queryInput.value, range = rangeSelect.value) {
   expandedTitleGroups.clear();
-  const query = queryInput.value;
-  const range = rangeSelect.value;
   setLoading();
   void rememberCurrentSearchState({ query, range });
   try {
@@ -174,10 +231,15 @@ function renderHistorySnapshot() {
   if (!searchSnapshot) return;
   const { query, matchedItems } = searchSnapshot;
   const visibleItems = showRenamedOnly ? matchedItems.filter((item) => item.isTitleRenamed) : matchedItems;
-  currentGroups = applyGroupNameOverridesToGroups(groupHistoryItems(visibleItems));
+  currentGroups = groupHistoryItems(visibleItems, sortOrder);
+  const conditions = JSON.stringify([query, searchSnapshot.range, showRenamedOnly, sortOrder]);
+  if (conditions !== renderedConditions) resultLimit = RESULT_PAGE_SIZE;
+  renderedConditions = conditions;
+  searchPending = queryInput.value.trim() !== query || rangeSelect.value !== searchSnapshot.range;
+  results.setAttribute('aria-busy', String(searchPending));
   renderSummary();
-  renderResults(applyPinnedStateToGroups(currentGroups, pinnedUrlKeys), { expandAll: Boolean(query) });
-  setStatus(showRenamedOnly ? `${visibleItems.length} 条已重命名` : `${visibleItems.length} 条`);
+  renderResults(applyPinnedStateToGroups(currentGroups, pinnedUrlKeys, sortOrder));
+  setStatus(searchPending ? '等待输入完成' : `${visibleItems.length} 条结果`);
 }
 
 function scheduleSnapshotRender() {
@@ -376,85 +438,99 @@ function focusBoundaryRangeOption(boundary) {
 }
 
 async function rememberCurrentSearchState(state = searchSnapshot) {
+  if (!isInitialized) {
+    pendingSearchPreferences = {
+      query: state?.query ?? queryInput.value,
+      range: state?.range ?? rangeSelect.value
+    };
+    return;
+  }
   try {
     await saveLastSearchState({
       query: state?.query ?? queryInput.value,
       range: state?.range ?? rangeSelect.value,
       showRenamedOnly,
-      showMinimalMode
-    });
+      showMinimalMode,
+      sortOrder
+    }, searchView);
   } catch {
     // Remembering the last search is helpful, but it should never block searching.
   }
 }
 
 function renderSummary() {
+  const count = document.createElement('span');
+  count.className = 'result-count';
+  count.setAttribute('role', 'status');
+  count.textContent = `${currentGroups.reduce((total, group) => total + group.itemCount, 0)} 条结果`;
   summary.replaceChildren(
+    count,
     createRenameMetric(),
-    createMinimalModeMetric(),
-    createCollapseMetric()
+    createViewMenu()
   );
 }
 
-function renderResults(groups, options = {}) {
-  const openGroupKeys = options.preserveOpenState ? getOpenGroupKeys() : null;
+function renderResults(groups) {
   results.replaceChildren();
-
   if (groups.length === 0) {
-    emptyState.hidden = false;
-    emptyState.textContent = '没有匹配结果。';
+    renderEmptyState();
     return;
   }
 
   emptyState.hidden = true;
+  const groupKeys = new Map(groups.flatMap((group) => group.items.map((item) => [item, group.key])));
+  const compare = !isPopup && sortOrder === 'recent'
+    ? compareHistoryItemsByRecency : getHistoryItemComparator(sortOrder);
+  const items = [...groupKeys.keys()].sort(compare);
+  // The full history view shows each resource in its actual chronological slot.
+  const entries = isPopup ? groupItemsByDisplayTitle(items) : items.map((item) => ({ kind: 'item', item }));
   const fragment = document.createDocumentFragment();
-
-  groups.forEach((group) => {
-    const isOpen = options.expandAll || (openGroupKeys ? openGroupKeys.has(group.key) : false);
-    fragment.append(createGroupItem(group, isOpen));
-  });
-  results.append(fragment);
-}
-
-function createGroupItem(group, isOpen) {
-  const row = document.createElement('li');
-  row.className = 'result-group';
-
-  const details = document.createElement('details');
-  details.className = 'result-group-details';
-  details.dataset.groupKey = group.key;
-  details.open = isOpen;
-
-  const header = document.createElement('summary');
-  header.className = 'result-group-summary';
-
-  const title = document.createElement('span');
-  title.className = 'result-group-title';
-  title.textContent = group.label;
-  title.title = group.originalLabel || group.key;
-
-  const meta = document.createElement('span');
-  meta.className = 'result-group-meta';
-  meta.textContent = formatGroupMeta(group);
-
-  header.append(title, createGroupRenameButton(group), meta);
-
-  const list = document.createElement('ol');
-  list.className = 'result-group-list';
-
-  for (const entry of groupItemsByDisplayTitle(group.items)) {
-    list.append(entry.kind === 'title-group'
-      ? createTitleGroupItem(entry, group.key)
-      : createResultItem(entry.item, group.key, { distinguishUrl: entry.distinguishUrl }));
+  let lastDay = null;
+  for (const entry of entries.slice(0, resultLimit)) {
+    const item = entry.item ?? entry.items[0];
+    if (!isPopup && sortOrder === 'recent') {
+      const date = new Date(Number(item.lastVisitTime ?? 0));
+      const day = Number(item.lastVisitTime) > 0 && Number.isFinite(date.getTime())
+        ? historyDayFormatter.format(date)
+        : '未知时间';
+      if (day !== lastDay) {
+        const divider = document.createElement('li');
+        divider.className = 'history-day';
+        const heading = document.createElement('h2');
+        heading.textContent = day;
+        divider.append(heading);
+        fragment.append(divider);
+        lastDay = day;
+      }
+    }
+    const groupKey = groupKeys.get(item);
+    fragment.append(entry.kind === 'title-group' ? createTitleGroupItem(entry, groupKey)
+      : createResultItem(item, groupKey, { distinguishUrl: entry.distinguishUrl }));
   }
-
-  details.append(header, list);
-  row.append(details);
-  return row;
+  if (entries.length > resultLimit) {
+    const more = document.createElement('li');
+    more.className = 'results-more';
+    const button = document.createElement('button');
+    button.className = 'secondary-button';
+    button.type = 'button';
+    button.textContent = `显示更多（剩余 ${entries.length - resultLimit} 项）`;
+    button.addEventListener('click', () => {
+      const oldLimit = resultLimit;
+      resultLimit += RESULT_PAGE_SIZE;
+      renderResults(groups);
+      [...results.children].filter((row) => !row.classList.contains('history-day'))[oldLimit]
+        ?.querySelector('a.result-title')?.focus();
+    });
+    more.append(button);
+    fragment.append(more);
+  }
+  results.append(fragment);
+  updateCollapseControl();
 }
 
 function createTitleGroupItem(entry, groupKey) {
-  const comparison = describeLinkDifferences(entry.items);
+  const representative = entry.items.reduce((best, item) =>
+    compareHistoryItemsByVisits(item, best) < 0 ? item : best);
   const row = document.createElement('li');
   row.className = 'title-group';
   const details = document.createElement('details');
@@ -462,8 +538,10 @@ function createTitleGroupItem(entry, groupKey) {
   details.open = expandedTitleGroups.has(entry.key);
   details.addEventListener('toggle', () => {
     if (!details.isConnected) return;
-    if (details.open) expandedTitleGroups.add(entry.key);
-    else expandedTitleGroups.delete(entry.key);
+    if (details.open) {
+      populateLinks();
+      expandedTitleGroups.set(entry.key, renderedCount);
+    } else expandedTitleGroups.delete(entry.key);
   });
   const header = document.createElement('summary');
   header.className = 'result-item title-group-summary';
@@ -471,18 +549,14 @@ function createTitleGroupItem(entry, groupKey) {
   content.className = 'result-content';
   const title = document.createElement('a');
   title.className = 'result-title';
-  title.textContent = entry.title;
-  title.href = entry.items[0].url;
+  appendHighlightedText(title, entry.title, entry.items[0].searchMatch?.titleRanges);
+  title.href = representative.url;
   title.target = '_blank';
   title.rel = 'noreferrer';
-  title.title = `打开常用链接：${entry.items[0].url}`;
+  title.title = `打开访问最多的链接：${representative.url}`;
   title.addEventListener('click', (event) => event.stopPropagation());
-  content.append(title, createResultMeta(entry, { aggregate: true }));
-  const differenceSummary = document.createElement('div');
-  differenceSummary.className = 'link-difference-summary';
-  differenceSummary.textContent = comparison.summary;
-  differenceSummary.title = comparison.summary;
-  content.append(differenceSummary);
+  content.append(title, createResultMeta(entry, { aggregate: true, groupKey }));
+  appendMatchReason(content, entry.items[0]);
   const count = document.createElement('span');
   count.className = 'title-group-count';
   count.textContent = `${entry.items.length} 个链接`;
@@ -490,32 +564,44 @@ function createTitleGroupItem(entry, groupKey) {
   header.append(content, count);
   const list = document.createElement('ol');
   list.className = 'title-group-list';
-  const shared = document.createElement('div');
-  shared.className = 'link-shared-address';
-  shared.textContent = comparison.sharedAddress ? `${comparison.sharedLabel}：${comparison.sharedAddress}` : '各链接地址不同';
-  shared.title = shared.textContent;
-  entry.items.forEach((item, index) => list.append(createResultItem(item, groupKey, {
-    variant: comparison.variants[index], preferred: index === 0
-  })));
-  details.append(header, shared, list);
+  let items;
+  let choices;
+  let renderedCount = 0;
+  const more = document.createElement('li');
+  more.className = 'results-more';
+  const moreButton = document.createElement('button');
+  moreButton.className = 'secondary-button';
+  moreButton.type = 'button';
+  more.append(moreButton);
+
+  // A collapsed group can contain thousands of links. Defer both labels and
+  // DOM creation until expansion, then append bounded pages without rebuilding.
+  function populateLinks(limit = expandedTitleGroups.get(entry.key) || TITLE_GROUP_PAGE_SIZE) {
+    items ??= [...entry.items].sort(sortOrder === 'default'
+      ? compareHistoryItemsByVisits : getHistoryItemComparator(sortOrder));
+    choices ??= describeLinkChoices(items);
+    more.remove();
+    const fragment = document.createDocumentFragment();
+    const end = Math.min(limit, items.length);
+    for (; renderedCount < end; renderedCount += 1) {
+      fragment.append(createResultItem(items[renderedCount], groupKey, { choice: choices[renderedCount] }));
+    }
+    list.append(fragment);
+    if (renderedCount < items.length) {
+      moreButton.textContent = `显示更多链接（剩余 ${items.length - renderedCount} 个）`;
+      list.append(more);
+    }
+  }
+  moreButton.addEventListener('click', () => {
+    const oldCount = renderedCount;
+    populateLinks(renderedCount + TITLE_GROUP_PAGE_SIZE);
+    expandedTitleGroups.set(entry.key, renderedCount);
+    list.children[oldCount]?.querySelector('a')?.focus();
+  });
+  if (details.open) populateLinks();
+  details.append(header, list);
   row.append(details);
   return row;
-}
-
-function createGroupRenameButton(group) {
-  const button = document.createElement('button');
-  button.className = 'item-action-button group-rename-button';
-  button.type = 'button';
-  button.title = '修改分组名';
-  button.setAttribute('aria-label', '修改分组名');
-  button.append(createEditIcon());
-  button.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    renameGroup(group);
-  });
-
-  return button;
 }
 
 function createGroupRenameDialog() {
@@ -532,9 +618,21 @@ function createGroupRenameDialog() {
   });
 }
 
-function createResultItem(item, groupKey, { distinguishUrl = false, variant = null, preferred = false } = {}) {
+function createResultItem(item, groupKey, { distinguishUrl = false, choice = null } = {}) {
+  const variant = Boolean(choice);
   const row = document.createElement('li');
   row.className = variant ? 'result-item result-variant' : 'result-item';
+  if (!isPopup) {
+    row.classList.add('history-result');
+    const time = document.createElement('time');
+    time.className = 'history-visit-time';
+    const date = new Date(Number(item.lastVisitTime ?? 0));
+    const valid = Number(item.lastVisitTime) > 0 && Number.isFinite(date.getTime());
+    time.textContent = valid ? historyTimeFormatter.format(date) : '—';
+    time.title = valid ? formatVisitTime(item.lastVisitTime) : '未知时间';
+    if (valid) time.setAttribute('datetime', date.toISOString());
+    row.append(time);
+  }
   if (item.isPinned) {
     row.classList.add('result-item-pinned');
   }
@@ -553,49 +651,32 @@ function createResultItem(item, groupKey, { distinguishUrl = false, variant = nu
   title.href = item.url;
   title.target = '_blank';
   title.rel = 'noreferrer';
+  title.title = item.url || '';
   if (variant) {
-    title.setAttribute('aria-label', `打开${preferred ? '常用' : ''}链接：${variant.differences.map((diff) => `${diff.label} ${diff.value}`).join('；') || '地址相同'}`);
-    for (const diff of variant.differences.slice(0, 2)) {
-      const chip = document.createElement('span');
-      chip.className = 'link-difference';
-      const label = document.createElement('span');
-      label.className = 'link-difference-label';
-      label.textContent = diff.label;
-      const value = document.createElement('span');
-      value.className = 'link-difference-value';
-      value.textContent = diff.value;
-      chip.append(label, value);
-      title.append(chip);
+    const label = document.createElement('span');
+    label.className = 'result-choice-label';
+    label.textContent = choice.label;
+    title.append(label);
+    if (choice.secondary) {
+      const context = document.createElement('span');
+      context.className = 'result-choice-context';
+      context.textContent = choice.secondary;
+      title.append(context);
     }
-    if (!variant.differences.length) title.textContent = '地址相同';
+    title.title += `\n最近访问：${formatVisitTime(item.lastVisitTime)}\n${item.totalVisitCount ?? item.visitCount ?? 0} 次访问`;
+    title.setAttribute('aria-label', `${choice.label}${choice.secondary ? `，${choice.secondary}` : ''}，打开链接：${item.url}`);
   } else {
-    title.textContent = item.title || item.url || '(无标题)';
+    appendHighlightedText(title, item.title || item.url || '(无标题)', item.searchMatch?.titleRanges);
   }
 
   titleRow.append(title);
-  if (preferred) {
-    const tag = document.createElement('span');
-    tag.className = 'preferred-link-tag';
-    tag.textContent = '常用';
-    tag.title = '点击分组标题时打开此链接';
-    titleRow.append(tag);
-  }
   if (item.isTitleRenamed) {
     titleRow.append(createRenamedTag());
-  }
-  if (variant) {
-    const inspect = document.createElement('button');
-    inspect.className = 'link-details-button';
-    inspect.type = 'button';
-    inspect.textContent = variant.differences.length > 2 ? `详情 +${variant.differences.length - 2}` : '详情';
-    inspect.setAttribute('aria-label', '查看链接差异与完整地址');
-    inspect.setAttribute('aria-haspopup', 'dialog');
-    inspect.addEventListener('click', () => openLinkDetails(item, variant));
-    actions.append(inspect);
   }
   actions.append(createRenameButton(item), createPinButton(item));
 
   content.append(titleRow);
+  if (!variant) appendMatchReason(content, item);
   if (!variant) {
     const url = document.createElement('div');
     url.className = distinguishUrl ? 'result-url result-url-required' : 'result-url';
@@ -603,53 +684,87 @@ function createResultItem(item, groupKey, { distinguishUrl = false, variant = nu
     url.textContent = distinguishUrl ? item.url : formatHistoryUrlForGroup(item, groupKey);
     content.append(url);
   }
-  content.append(createResultMeta(item));
-  row.append(content, actions);
+  if (!variant) {
+    content.append(createResultMeta(item, { groupKey }));
+  }
+  row.append(content);
+  if (variant) {
+    const visits = document.createElement('span');
+    visits.className = 'result-variant-visits';
+    visits.textContent = `${item.totalVisitCount ?? item.visitCount ?? 0} 次访问`;
+    visits.title = '累计访问次数';
+    row.append(visits);
+  }
+  row.append(actions);
   return row;
 }
 
-function openLinkDetails(item, variant) {
-  const dialog = document.createElement('dialog');
-  dialog.className = 'link-details-dialog';
-  dialog.setAttribute('aria-label', '链接详情');
-  const heading = document.createElement('h2');
-  heading.textContent = '链接详情';
-  const title = document.createElement('p');
-  title.className = 'link-details-title';
-  title.textContent = item.title;
-  const fields = document.createElement('dl');
-  for (const diff of variant.differences) {
-    const label = document.createElement('dt');
-    label.textContent = `${diff.name} · ${diff.value}`;
-    const value = document.createElement('dd');
-    value.textContent = diff.detail;
-    fields.append(label, value);
+function appendHighlightedText(element, text, ranges = []) {
+  let offset = 0;
+  for (const [start, end] of ranges) {
+    element.append(document.createTextNode(text.slice(offset, start)));
+    const mark = document.createElement('mark');
+    mark.textContent = text.slice(start, end);
+    element.append(mark);
+    offset = end;
   }
-  const urlLabel = document.createElement('dt');
-  urlLabel.textContent = '完整地址';
-  const url = document.createElement('dd');
-  url.textContent = item.url;
-  fields.append(urlLabel, url);
-  const close = document.createElement('button');
-  close.className = 'secondary-button';
-  close.type = 'button';
-  close.textContent = '关闭';
-  close.autofocus = true;
-  close.addEventListener('click', () => dialog.close());
-  dialog.addEventListener('close', () => dialog.remove(), { once: true });
-  dialog.append(heading, title, fields, close);
-  document.body.append(dialog);
-  dialog.showModal();
+  element.append(document.createTextNode(text.slice(offset)));
 }
 
-function createResultMeta(item, { aggregate = false } = {}) {
+function appendMatchReason(content, item) {
+  const aliases = item.searchMatch?.aliases ?? [];
+  if (!aliases.length) return;
+  const reason = document.createElement('div');
+  reason.className = 'result-match';
+  reason.title = aliases.map((alias) => alias.text).join('；');
+  reason.append(document.createTextNode('曾用名：'));
+  aliases.forEach((alias, index) => {
+    if (index) reason.append(document.createTextNode('；'));
+    appendHighlightedText(reason, alias.text, alias.ranges);
+  });
+  content.append(reason);
+}
+
+function createResultHost(groupKey) {
+  const host = document.createElement(isPopup ? 'span' : 'button');
+  host.className = 'result-host';
+  const label = groupNameOverrides.get(groupKey) || groupKey;
+  // Keep source colors stable across sorting, filtering and custom group names.
+  let hash = 0;
+  for (const character of groupKey) hash = (Math.imul(hash, 31) + character.codePointAt(0)) >>> 0;
+  host.dataset.sourceTone = String(hash % 6);
+  host.dataset.groupKey = groupKey;
+  host.title = label === groupKey ? groupKey : `${label}（${groupKey}）`;
+  host.setAttribute('aria-label', `所属分组：${host.title}`);
+  if (!isPopup) {
+    host.type = 'button';
+    host.title += ' · 点击修改分组名';
+    host.setAttribute('aria-label', `修改分组名：${label}`);
+    host.addEventListener('click', () => renameGroup({
+      key: groupKey, label, originalLabel: groupKey, isGroupRenamed: groupNameOverrides.has(groupKey)
+    }));
+  }
+  const text = document.createElement('span');
+  text.className = 'result-host-label';
+  text.textContent = label;
+  host.append(text);
+  return host;
+}
+
+function createResultMeta(item, { aggregate = false, groupKey = null } = {}) {
   const meta = document.createElement('div');
   meta.className = 'result-meta';
   const visitCount = item.totalVisitCount ?? item.visitCount ?? 0;
-  meta.append(
-    createTag(formatVisitTime(item.lastVisitTime)),
-    createTag(`${aggregate ? '合计 ' : ''}${visitCount} 次访问`)
-  );
+  if (groupKey) meta.append(createResultHost(groupKey));
+  if (isPopup || sortOrder !== 'recent') meta.append(createTag(formatVisitTime(item.lastVisitTime)));
+  meta.append(createTag(`${aggregate ? '合计 ' : ''}${visitCount} 次访问`));
+  if (item.isTitleRenamed && searchSnapshot?.range !== 'all' &&
+    Number(item.lastVisitTime ?? 0) < searchSnapshot?.rangeStartTime) {
+    const note = createTag('跨时间保留');
+    note.classList.add('retained-note');
+    note.title = '已命名页面不受时间筛选限制';
+    meta.append(note);
+  }
   return meta;
 }
 
@@ -850,72 +965,102 @@ function createRenameMetric() {
   metric.title = showRenamedOnly ? '显示全部页面' : '只显示已重命名页面';
 
   const metricLabel = document.createElement('span');
-  metricLabel.textContent = '重命名';
+  metricLabel.textContent = '仅已命名';
 
   metric.append(metricLabel);
   metric.addEventListener('click', () => {
     showRenamedOnly = !showRenamedOnly;
-    rememberCurrentSearchState();
-    scheduleSnapshotRender();
+    editedDisplayPreferences.add('renamed');
+    liveSearch.change();
   });
 
   return metric;
 }
 
-function createMinimalModeMetric() {
-  const metric = document.createElement('button');
-  metric.className = 'metric metric-button minimal-mode-metric';
-  metric.type = 'button';
-  metric.setAttribute('aria-pressed', String(showMinimalMode));
-  metric.title = showMinimalMode ? '关闭极简模式' : '开启极简模式';
-
-  const metricLabel = document.createElement('span');
-  metricLabel.textContent = '极简';
-
-  metric.append(metricLabel);
-  metric.addEventListener('click', () => {
-    showMinimalMode = !showMinimalMode;
-    syncMinimalModePresentation(metric);
+function createSortControl() {
+  const label = document.createElement('label');
+  label.className = 'field sort-control';
+  const caption = document.createElement('span');
+  caption.className = 'visually-hidden';
+  caption.textContent = '排序方式';
+  const select = document.createElement('select');
+  select.id = 'sort-order';
+  select.setAttribute('aria-label', '排序方式');
+  for (const [value, text] of [
+    ...(isPopup ? [['default', '默认排序']] : []),
+    ['visits', '点击次数 ↓'],
+    ['recent', '上次访问 ↓'],
+    ['name', '名称升序']
+  ]) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = text;
+    select.append(option);
+  }
+  select.value = sortOrder;
+  select.addEventListener('change', () => {
+    sortOrder = normalizeSortOrder(select.value);
+    editedDisplayPreferences.add('sort');
+    expandedTitleGroups.clear();
+    renderHistorySnapshot();
     void rememberCurrentSearchState();
   });
-
-  return metric;
+  label.append(caption, select);
+  return label;
 }
 
-function syncMinimalModePresentation(metric = null) {
+function createViewMenu() {
+  const menu = document.createElement('details');
+  menu.className = 'view-menu';
+  const trigger = document.createElement('summary');
+  trigger.className = 'view-menu-trigger';
+  trigger.textContent = '显示';
+  const panel = document.createElement('div');
+  panel.className = 'view-menu-panel';
+  const label = document.createElement('label');
+  label.className = 'view-option';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = showMinimalMode;
+  checkbox.addEventListener('change', () => {
+    showMinimalMode = checkbox.checked;
+    editedDisplayPreferences.add('minimal');
+    syncMinimalModePresentation();
+    void rememberCurrentSearchState();
+  });
+  label.append(checkbox, document.createTextNode('隐藏网址路径'));
+  panel.append(label);
+  if (isPopup) panel.append(createCollapseMetric());
+  menu.append(trigger, panel);
+  return menu;
+}
+
+function syncMinimalModePresentation() {
   document.body.classList.toggle('minimal-mode', showMinimalMode);
-
-  if (!metric) {
-    return;
-  }
-
-  metric.setAttribute('aria-pressed', String(showMinimalMode));
-  metric.title = showMinimalMode ? '关闭极简模式' : '开启极简模式';
 }
 
 function createCollapseMetric() {
   const metric = document.createElement('button');
-  metric.className = 'metric metric-button';
+  metric.className = 'view-collapse-button';
   metric.type = 'button';
   metric.disabled = currentGroups.length === 0;
-  metric.title = '折叠所有分组';
-
-  const metricLabel = document.createElement('span');
-  metricLabel.textContent = '折叠';
-
-  metric.append(metricLabel);
+  metric.textContent = '折叠全部';
   metric.addEventListener('click', () => {
-    collapseAllGroups();
+    const details = [...results.querySelectorAll('details')];
+    const shouldExpand = !details.some((element) => element.open);
+    expandedTitleGroups.clear();
+    details.forEach((element) => { element.open = shouldExpand; });
+    updateCollapseControl();
   });
 
   return metric;
 }
 
-function collapseAllGroups() {
-  expandedTitleGroups.clear();
-  for (const details of results.querySelectorAll('details[open]')) {
-    details.open = false;
-  }
+function updateCollapseControl() {
+  const button = summary.querySelector('.view-collapse-button');
+  if (!button) return;
+  button.disabled = !results.querySelector('details');
+  button.textContent = results.querySelector('details[open]') ? '折叠全部' : '展开全部';
 }
 
 function createTag(text) {
@@ -933,25 +1078,77 @@ function createRenamedTag() {
   return tag;
 }
 
-function renderError(error) {
+function renderError(error, retry = () => liveSearch.submit()) {
+  searchPending = false;
+  results.setAttribute('aria-busy', 'false');
   currentGroups = [];
   results.replaceChildren();
-  summary.replaceChildren();
+  renderSummary();
   emptyState.hidden = false;
-  emptyState.textContent = error.message;
+  emptyState.replaceChildren();
+  const message = document.createElement('p');
+  message.textContent = error.message || '读取历史记录失败';
+  emptyState.append(message, createRecoveryButton('重试', retry));
   setStatus('错误');
 }
 
 function setLoading() {
-  results.replaceChildren();
-  summary.replaceChildren();
-  emptyState.hidden = false;
-  emptyState.textContent = '正在搜索...';
+  searchPending = true;
+  results.setAttribute('aria-busy', 'true');
+  if (!results.children.length) {
+    emptyState.hidden = false;
+    emptyState.textContent = '正在读取历史记录…';
+  }
   setStatus('搜索中');
 }
 
-function setStatus(text) {
+function setStatus(text, { error = false } = {}) {
   statusPill.textContent = text;
+  statusPill.parentElement.classList.toggle('visually-hidden', !error);
+  statusPill.parentElement.classList.toggle('status-error', error);
+  if (searchPending) {
+    const count = summary.querySelector('.result-count');
+    if (count) count.textContent = text;
+  }
+}
+
+function renderEmptyState() {
+  emptyState.hidden = false;
+  emptyState.replaceChildren();
+  const heading = document.createElement('p');
+  heading.className = 'empty-heading';
+  heading.textContent = '没有找到匹配页面';
+  const hint = document.createElement('p');
+  hint.textContent = showRenamedOnly ? '当前仅显示已命名页面，可以清除筛选再试。'
+    : searchSnapshot?.range !== 'all' ? '当前时间范围内没有结果，可以搜索全部时间。'
+      : '试试更短的标题或曾用名。';
+  const actions = document.createElement('div');
+  actions.className = 'empty-actions';
+  if (searchSnapshot?.range !== 'all') actions.append(createRecoveryButton('搜索全部时间', () => {
+    setRangeSelectValue('all');
+    liveSearch.change();
+  }));
+  if (showRenamedOnly) actions.append(createRecoveryButton('清除筛选', () => {
+    showRenamedOnly = false;
+    editedDisplayPreferences.add('renamed');
+    setRangeSelectValue('all');
+    liveSearch.change();
+  }));
+  if (searchSnapshot?.query) actions.append(createRecoveryButton('清空关键词', () => {
+    queryInput.value = '';
+    liveSearch.change();
+    queryInput.focus();
+  }));
+  emptyState.append(heading, hint, actions);
+}
+
+function createRecoveryButton(label, action) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'secondary-button';
+  button.textContent = label;
+  button.addEventListener('click', action);
+  return button;
 }
 
 function renameItem(item) {
@@ -1030,27 +1227,6 @@ function closeGroupRenameDialog() {
   closeDialogElement(groupRenameDialog.element);
 }
 
-function applyGroupNameOverridesToGroups(groups) {
-  return groups.map((group) => {
-      const overrideLabel = groupNameOverrides.get(group.key);
-
-      if (!overrideLabel) {
-        return {
-          ...group,
-          originalLabel: group.label,
-          isGroupRenamed: false
-        };
-      }
-
-      return {
-        ...group,
-        originalLabel: group.label,
-        label: overrideLabel,
-        isGroupRenamed: true
-      };
-    });
-}
-
 function closeRenameDialog() {
   renameSession.close();
   closeDialogElement(renameDialog.element);
@@ -1089,20 +1265,10 @@ async function togglePinnedItem(item) {
       shouldPin,
       item.activePinKeys ?? item.pinKeys ?? []
     );
-    renderResults(applyPinnedStateToGroups(currentGroups, pinnedUrlKeys), {
-      preserveOpenState: true
-    });
+    renderResults(applyPinnedStateToGroups(currentGroups, pinnedUrlKeys, sortOrder));
   } catch {
-    setStatus('置顶保存失败');
+    setStatus('置顶保存失败，请重试。', { error: true });
   }
-}
-
-function getOpenGroupKeys() {
-  return new Set(
-    [...results.querySelectorAll('.result-group-details[open]')]
-      .map((details) => details.dataset.groupKey)
-      .filter(Boolean)
-  );
 }
 
 function addStorageChangeListener() {
@@ -1113,7 +1279,7 @@ function addStorageChangeListener() {
 
     if (changes[PINNED_URLS_STORAGE_KEY]) {
       pinnedUrlKeys = normalizePinnedPageKeys(changes[PINNED_URLS_STORAGE_KEY].newValue);
-      renderResults(applyPinnedStateToGroups(currentGroups, pinnedUrlKeys), { preserveOpenState: true });
+      renderResults(applyPinnedStateToGroups(currentGroups, pinnedUrlKeys, sortOrder));
     }
 
     if (changes[GROUP_NAME_OVERRIDES_STORAGE_KEY]) {
@@ -1135,7 +1301,9 @@ function addStorageChangeListener() {
 function addHistoryIndexUpdateListener() {
   globalThis.chrome?.runtime?.onMessage?.addListener((message) => {
     if (message?.type === HISTORY_INDEX_UPDATED_MESSAGE) {
-      void searchState.refresh(message.revision).catch((error) => { setStatus(error.message || '刷新失败'); });
+      void searchState.refresh(message.revision).catch((error) => {
+        setStatus(error.message || '刷新失败，请重新搜索。', { error: true });
+      });
     }
     return false;
   });
@@ -1156,16 +1324,6 @@ function requestHistoryIndex(type) {
       resolve(response);
     });
   });
-}
-
-function formatGroupMeta(group) {
-  const baseMeta = `${group.itemCount} 条 · ${formatVisitTime(group.lastVisitTime)}`;
-
-  if (!group.pinnedCount) {
-    return baseMeta;
-  }
-
-  return `${baseMeta} · 置顶 ${group.pinnedCount}`;
 }
 
 function formatVisitTime(value) {
