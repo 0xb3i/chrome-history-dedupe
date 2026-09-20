@@ -24,8 +24,8 @@ test('history and popup share the same search entry and visible controls', () =>
     assert.match(html, /input id="query" type="search"/);
     assert.doesNotMatch(html, /id="(?:mode|max-results)"/);
     assert.match(html, /class="version-badge"/);
-    assert.doesNotMatch(html, /<span>范围<\/span>/);
     assert.match(html, /<span class="visually-hidden">时间筛选<\/span>/);
+    assert.match(html, /id="renamed-only" type="checkbox"/);
     for (const value of ['day', 'week', 'month', 'quarter', 'all']) {
       assert.match(html, new RegExp(`<option value="${value}"`));
     }
@@ -58,8 +58,16 @@ test('popup has a fixed measurement width and vertical scrolling', () => {
   assert.match(popupHtml, /<html class="popup-root" lang="zh-CN">/);
   assert.match(css, /\.popup-root \{[^}]*width: 580px;[^}]*min-width: 580px;[^}]*overflow: hidden;/);
   assert.match(css, /\.popup-body \{[^}]*width: 580px;[^}]*max-height: 560px;[^}]*overflow-x: hidden;[^}]*overflow-y: auto;/);
-  assert.match(css, /\.controls \{[^}]*grid-template-columns: minmax\(0, 1fr\) 120px 124px auto;/);
+  assert.match(css, /\.controls \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
   assert.match(css, /\.popup-controls \{[^}]*padding: 0;[^}]*border: 0;/);
+});
+
+test('result menu triggers and panels share their geometry and retain independent surface rules', () => {
+  assert.match(css, /\.result-controls \.select-combobox,\s*\.view-menu \{[^}]*width: var\(--menu-control-width\);/);
+  assert.match(css, /\.result-controls \.select-combobox-menu,\s*\.view-menu-panel \{[^}]*width: var\(--menu-panel-width\);/);
+  assert.match(css, /\.select-combobox-menu,\s*\.view-menu-panel \{[^}]*position: absolute;[^}]*background: var\(--surface\);/);
+  assert.match(css, /\.select-combobox-option \{[^}]*display: grid;/);
+  assert.match(css, /\.summary \{[^}]*display: flex;/);
 });
 
 test('result rows keep dividers and clip long titles before action buttons', () => {
@@ -69,6 +77,7 @@ test('result rows keep dividers and clip long titles before action buttons', () 
   assert.match(css, /\.result-content \{[^}]*min-width: 0;/);
   assert.match(css, /\.result-title-row \{[^}]*display: flex;/);
   assert.match(css, /\.result-title \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/);
+  assert.match(css, /\.result-title:has\(mark\),\s*\.result-match:has\(mark\) \{[^}]*display: -webkit-box;[^}]*-webkit-box-orient: vertical;[^}]*-webkit-line-clamp: 3;[^}]*overflow: hidden;/);
   assert.match(css, /\.renamed-tag \{[^}]*flex: 0 0 auto;/);
   assert.ok(css.includes('.popup-results .result-url'));
 });
@@ -97,7 +106,7 @@ test('result actions expose icon labels and pressed-state affordances', () => {
   assert.ok(historyPageJs.includes("button.setAttribute('aria-label', label)"));
   assert.ok(historyPageJs.includes('aria-pressed'));
   assert.ok(css.includes('.item-action-button svg'));
-  assert.ok(css.includes('.metric-button[aria-pressed="true"]'));
+  assert.ok(css.includes('.rename-filter input:checked'));
   assert.match(css, /\.minimal-mode \.result-url \{[^}]*display: none;/);
 });
 

@@ -60,6 +60,7 @@ function addHistoryItemToDedupeBuckets(buckets, item, mode) {
     buckets.set(dedupeKey, {
       dedupeKey,
       preferred: item,
+      titledItem: getMeaningfulPageTitle(item.title, item.url) ? item : null,
       dedupeCount: getDedupeCount(item),
       lastVisitTime: getVisitTime(item),
       pinKeys: new Set(getItemPinKeys(item)),
@@ -81,6 +82,10 @@ function addHistoryItemToDedupeBuckets(buckets, item, mode) {
   const preferred = pickPreferredItem(current, item);
   const isNormalizedUrlBucket = mode === 'normalized-url';
   if (preferred !== current) accumulator.preferred = preferred;
+  if (getMeaningfulPageTitle(item.title, item.url) &&
+    (!accumulator.titledItem || compareHistoryItemsByRecency(item, accumulator.titledItem) < 0)) {
+    accumulator.titledItem = item;
+  }
   accumulator.dedupeCount += getDedupeCount(item);
   accumulator.lastVisitTime = Math.max(accumulator.lastVisitTime, getVisitTime(item));
   addStringValues(accumulator.pinKeys, getItemPinKeys(item));
@@ -97,7 +102,12 @@ function addHistoryItemToDedupeBuckets(buckets, item, mode) {
 
 function finalizeDedupeBuckets(buckets) {
   return [...buckets.values()].map((accumulator) => decorateItem(
-    accumulator.preferred,
+    {
+      ...accumulator.preferred,
+      title: getMeaningfulPageTitle(accumulator.preferred.title, accumulator.preferred.url)
+        ? accumulator.preferred.title
+        : accumulator.titledItem?.title || accumulator.preferred.title
+    },
     accumulator.dedupeKey,
     {
       dedupeCount: accumulator.dedupeCount,
@@ -208,7 +218,9 @@ function createCapturedTitleContext(capturedTitles) {
 
   for (const [key, value] of titles) {
     const pageKey = getPageIdentityKey(key);
-    if (pageKey && !titlesByPageIdentity.has(pageKey)) {
+    const record = normalizeCapturedPageValue(value);
+    if (pageKey && getMeaningfulPageTitle(record.title, key, record.resolvedUrl) &&
+      !titlesByPageIdentity.has(pageKey)) {
       titlesByPageIdentity.set(pageKey, value);
     }
   }
@@ -220,29 +232,23 @@ function applyCapturedTitleToItem(item, context) {
   const { titles, titlesByPageIdentity } = context;
   const titleKey = getHistoryItemCapturedTitleKey(item);
   const exactCapturedValue = titles.get(titleKey);
-  const capturedValue = exactCapturedValue ??
+  const exactPage = normalizeCapturedPageValue(exactCapturedValue);
+  const hasExactTitle = Boolean(getMeaningfulPageTitle(exactPage.title, item?.url, exactPage.resolvedUrl));
+  const capturedValue = hasExactTitle ? exactCapturedValue :
     titlesByPageIdentity.get(getPageIdentityKey(item?.url));
   const capturedPage = normalizeCapturedPageValue(capturedValue);
-  const capturedTitle = getUsableOverrideTitle(capturedPage.title);
+  const capturedTitle = getMeaningfulPageTitle(capturedPage.title, item?.url, capturedPage.resolvedUrl);
   const capturedResolvedUrl = getUsableUrl(capturedPage.resolvedUrl);
-  const resolvedUrl = exactCapturedValue !== undefined ||
+  const resolvedUrl = hasExactTitle ||
     getPageIdentityKey(capturedResolvedUrl) === getPageIdentityKey(item?.url)
     ? capturedResolvedUrl
     : '';
-  const historyTitle = getUsableOverrideTitle(item?.title);
-
-  if (!capturedTitle) {
-    return {
-      ...item,
-      historyTitle,
-      title: ''
-    };
-  }
+  const historyTitle = getMeaningfulPageTitle(item?.title, item?.url);
 
   return {
     ...item,
     historyTitle,
-    title: capturedTitle,
+    title: capturedTitle || historyTitle,
     ...(resolvedUrl ? { dedupeUrl: resolvedUrl, resolvedUrl } : {})
   };
 }
@@ -479,13 +485,28 @@ function getGroupKey(item) {
   }
 }
 
-function getUsableOverrideTitle(title) {
+// Only automatic titles use this filter; explicit user names remain unrestricted.
+export function getMeaningfulPageTitle(title, ...urls) {
   const normalized = String(title ?? '')
     .normalize('NFKC')
     .replace(/\p{Cf}+/gu, '')
     .trim()
     .replace(/\s+/g, ' ');
-  return normalized || '';
+  if (!normalized || isUrlLikeSearchTitle(normalized) ||
+    /^(?:loading|加载中|正在加载)[.\s…。!！]*$/iu.test(normalized)) return '';
+
+  for (const rawUrl of urls) {
+    if (!rawUrl) continue;
+    try {
+      const url = new URL(rawUrl);
+      const address = url.href.replace(/^[a-z]+:\/\//i, '').replace(/\/$/, '');
+      if ([address, safeDecodeUrlPath(address), url.host].some((value) =>
+        value.toLowerCase() === normalized.replace(/\/$/, '').toLowerCase())) return '';
+    } catch {
+      // Missing or malformed URLs do not invalidate an otherwise useful title.
+    }
+  }
+  return normalized;
 }
 
 function normalizeCapturedPageValue(value) {

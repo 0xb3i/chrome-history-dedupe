@@ -113,10 +113,14 @@ async function createPage({ file = 'popup.html', items = [], titles = new Map(),
       }
     },
     input(value, properties = {}) { one('#query').value = value; fire(one('#query'), 'input', properties); },
+    async changeRenamedOnly(checked) {
+      one('#renamed-only').checked = checked;
+      fire(one('#renamed-only'), 'change');
+      await settle();
+    },
     async changeSort(value) {
-      one('#sort-order').focus();
-      one('#sort-order').value = value;
-      fire(one('#sort-order'), 'change');
+      one('[data-select-id="sort-order"] .select-combobox-button').click();
+      one(`[data-select-id="sort-order"] .select-combobox-option[data-value="${value}"]`).click();
       await settle();
     },
     async flush() {
@@ -126,13 +130,39 @@ async function createPage({ file = 'popup.html', items = [], titles = new Map(),
       await settle();
     },
     async changeRange(value) {
-      one('.range-combobox-button').click();
-      one(`.range-combobox-option[data-value="${value}"]`).click();
+      one('[data-select-id="range"] .select-combobox-button').click();
+      one(`[data-select-id="range"] .select-combobox-option[data-value="${value}"]`).click();
       await settle();
     },
     button(text, root = document) { return [...root.querySelectorAll('button')].find((button) => button.textContent === text); }
   };
 }
+
+test('long callback titles and late historical matches stay compact with full tooltips and navigation', async () => {
+  const callback = `login.example.com/api/oauth2/callback?session=${'x'.repeat(1600)}`;
+  const alias = `${'历史内容'.repeat(100)}login 资料`;
+  const items = [pageItem(callback, 'callback'),
+    pageItem('当前名称', 'current', { searchableTitles: ['当前名称', alias] })];
+  for (const file of ['popup.html', 'history.html']) {
+    const page = await createPage({ file, items, saved: { query: 'login', range: 'all' } });
+    const link = page.all('.result-title').find((link) => link.href === items[0].url);
+    assert.ok(link.textContent.length <= 162);
+    assert.ok(link.textContent.endsWith('…'));
+    assert.equal(link.querySelector('mark').textContent, 'login');
+    assert.ok(link.title.includes(callback));
+    link.click();
+    assert.deepEqual(page.opened, [items[0].url]);
+    const reason = page.one('.result-match');
+    assert.ok(reason.textContent.length < 180);
+    assert.equal(reason.querySelector('mark').textContent, 'login');
+    assert.equal(reason.title, alias);
+  }
+  const grouped = await createPage({ items: [pageItem(callback, 'first'), pageItem(callback, 'second')],
+    saved: { query: 'login', range: 'all' } });
+  const title = grouped.one('.title-group-summary .result-title');
+  assert.ok(title.textContent.length <= 162);
+  assert.ok(title.title.includes(callback));
+});
 
 test('real page updates after typing and IME commit, and renders title matches and historical names', async () => {
   const page = await createPage({ items: [
@@ -183,10 +213,10 @@ test('full page time and renamed filters apply immediately to flat results', asy
   await page.changeRange('day');
   assert.deepEqual(new Set(page.titles()), new Set(['近期页面', '已整理资料']));
   assert.equal(page.one('.retained-note').textContent, '跨时间保留');
-  page.button('仅已命名').click();
+  await page.changeRenamedOnly(true);
   await settle();
   assert.deepEqual(page.titles(), ['已整理资料']);
-  assert.equal(page.button('仅已命名').getAttribute('aria-pressed'), 'true');
+  assert.equal(page.one('#renamed-only').checked, true);
 });
 
 test('full history defaults to all-time chronology with local date headings and separate same-title links', async () => {
@@ -210,7 +240,7 @@ test('full history defaults to all-time chronology with local date headings and 
   assert.equal(page.one('#sort-order').value, 'recent');
   assert.deepEqual(urls(), expected);
   assert.equal(page.all('#results details').length, 0);
-  assert.equal(page.one('.view-collapse-button'), null);
+  assert.equal(page.one('#expand-groups'), null);
   assert.deepEqual(page.all('.history-visit-time').map((time) => time.getAttribute('datetime')),
     [morning + 3600000, morning, priorDay + 1000, priorDay].map((value) => new Date(value).toISOString()));
   const formatter = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'full' });
@@ -263,10 +293,10 @@ test('sorting controls order both pages, preserve pins, and apply to refreshed d
   for (const file of ['popup.html', 'history.html']) {
     let index = { revision: 1, pageItems: items };
     const page = await createPage({ file, saved: { query: '项目', range: 'all' }, loadIndex: async () => index });
-    const fields = [...page.one('#search-form').children];
-    assert.equal(fields[1].querySelector('#range'), page.one('#range'));
-    assert.equal(fields[2].querySelector('#sort-order'), page.one('#sort-order'));
-    assert.equal(page.one('#summary #sort-order'), null);
+    assert.equal(page.one('#search-form #range'), null);
+    assert.equal(page.one('.filter-bar #range'), page.one('#range'));
+    assert.equal(page.one('.filter-bar #renamed-only'), page.one('#renamed-only'));
+    assert.equal(page.one('#result-controls #sort-order'), page.one('#sort-order'));
     assert.deepEqual(page.titles(), file === 'popup.html' ? ['项目 C', '项目 B', '项目 A'] : ['项目 A', '项目 B', '项目 C']);
     await page.changeSort('recent');
     assert.deepEqual(page.titles(), ['项目 A', '项目 B', '项目 C']);
@@ -275,7 +305,7 @@ test('sorting controls order both pages, preserve pins, and apply to refreshed d
     await page.changeSort('name');
     assert.deepEqual(page.titles(), ['项目 A', '项目 B', '项目 C']);
     assert.equal(page.writes.at(-1).sortOrder, 'name');
-    assert.equal(page.document.activeElement, page.one('#sort-order'));
+    assert.equal(page.document.activeElement, page.one('[data-select-id="sort-order"] .select-combobox-button'));
     page.listeners.storage[0]({ [imports.PINNED_URLS_STORAGE_KEY]: { newValue: [items[2].url] } }, 'local');
     assert.deepEqual(page.titles(), ['项目 B', '项目 A', '项目 C']);
     await page.changeSort('recent');
@@ -284,6 +314,56 @@ test('sorting controls order both pages, preserve pins, and apply to refreshed d
     await settle();
     assert.deepEqual(page.titles(), file === 'popup.html' ? ['项目 B', '项目 C', '项目 A'] : ['项目 C', '项目 A', '项目 B']);
     assert.equal(page.one('#sort-order').value, 'recent');
+  }
+});
+
+test('both filters use styled listboxes with saved labels, keyboard navigation and dismissal', async () => {
+  for (const file of ['popup.html', 'history.html']) {
+    const page = await createPage({ file, items: [pageItem('页面', 'page')],
+      saved: { query: '', range: 'week', sortOrder: 'name' } });
+    const sort = page.one('[data-select-id="sort-order"]');
+    const range = page.one('[data-select-id="range"]');
+    const trigger = sort.querySelector('.select-combobox-button');
+    const menu = sort.querySelector('[role="listbox"]');
+    for (const id of ['range', 'sort-order']) {
+      assert.equal(page.one(`#${id}`).getAttribute('aria-hidden'), 'true');
+      assert.equal(page.one(`#${id}`).tabIndex, -1);
+    }
+    assert.equal(trigger.getAttribute('aria-label'), '排序方式：名称升序');
+    assert.equal(trigger.getAttribute('aria-controls'), menu.id);
+    assert.equal(range.querySelector('.select-combobox-value').textContent, '7 天');
+    assert.doesNotMatch(menu.textContent, /↓/);
+    assert.equal(sort.querySelector('[aria-selected="true"]').dataset.value, 'name');
+    trigger.focus();
+    page.fire(trigger, 'keydown', { key: 'ArrowDown' });
+    assert.equal(menu.hidden, false);
+    assert.equal(trigger.getAttribute('aria-expanded'), 'true');
+    assert.equal(page.document.activeElement.dataset.value, 'name');
+    page.fire(page.document.activeElement, 'keydown', { key: 'ArrowUp' });
+    assert.equal(page.document.activeElement.dataset.value, 'recent');
+    page.fire(page.document.activeElement, 'keydown', { key: 'Home' });
+    assert.equal(page.document.activeElement.dataset.value, file === 'popup.html' ? 'default' : 'visits');
+    page.fire(page.document.activeElement, 'keydown', { key: 'End' });
+    assert.equal(page.document.activeElement.dataset.value, 'name');
+    page.fire(page.document.activeElement, 'keydown', { key: 'Escape' });
+    assert.equal(menu.hidden, true);
+    assert.equal(page.document.activeElement, trigger);
+    assert.equal(page.writes.length, 0);
+    trigger.click();
+    sort.querySelector('[data-value="recent"]').click();
+    await settle();
+    assert.equal(menu.hidden, true);
+    assert.equal(trigger.getAttribute('aria-label'), '排序方式：最近访问');
+    assert.equal(page.writes.at(-1).sortOrder, 'recent');
+    trigger.click();
+    range.querySelector('.select-combobox-button').click();
+    assert.equal(menu.hidden, true);
+    assert.equal(range.querySelector('[role="listbox"]').hidden, false);
+    page.one('#query').focus();
+    assert.equal(range.querySelector('[role="listbox"]').hidden, true);
+    trigger.click();
+    page.one('#summary').click();
+    assert.equal(menu.hidden, true);
   }
 });
 
@@ -335,8 +415,17 @@ test('source badges preserve tab ranking and keep group identity through filteri
   assert.equal(page.one('.result-group'), null);
   const badges = page.all('.result-host');
   assert.deepEqual(badges.map((badge) => badge.textContent), ['编译平台', 'docs.example.com', '编译平台']);
-  assert.equal(badges[0].title, '编译平台（build.example.com）');
-  assert.equal(badges[0].getAttribute('aria-label'), '所属分组：编译平台（build.example.com）');
+  assert.equal(badges[0].title, '编译平台（build.example.com） · 点击修改分组名');
+  assert.equal(badges[0].getAttribute('aria-label'), '修改分组名：编译平台');
+  assert.equal(badges[0].tagName, 'BUTTON');
+  badges[0].click();
+  const dialog = page.one('dialog[open]');
+  assert.equal(dialog.querySelector('h2').textContent, '修改分组名');
+  assert.equal(dialog.querySelector('input').value, '编译平台');
+  assert.equal(dialog.querySelector('.rename-dialog-url').textContent, 'build.example.com');
+  assert.equal(page.button('还原原名', dialog).disabled, false);
+  page.button('取消', dialog).click();
+  assert.equal(page.one('dialog[open]'), null);
   const tone = badges[0].dataset.sourceTone;
   assert.equal(badges[2].dataset.sourceTone, tone);
   page.input('编译');
@@ -358,11 +447,12 @@ test('empty states recover through all-time search, clearing renamed filter, and
   page.button('搜索全部时间').click();
   await settle();
   assert.deepEqual(page.titles(), ['旧资料']);
-  page.button('仅已命名').click();
+  await page.changeRenamedOnly(true);
   await settle();
   assert.equal(page.titles().length, 0);
   page.button('清除筛选').click();
   await settle();
+  assert.equal(page.one('#renamed-only').checked, false);
   assert.deepEqual(page.titles(), ['旧资料']);
   page.input('没有这样的标题');
   await page.flush();
@@ -384,6 +474,15 @@ test('same-title choices expose the distinguishing parameter while preserving ad
   assert.equal(group.querySelector('summary a').href, base.url);
   assert.equal(group.querySelector('.result-meta').textContent.includes('合计 9 次访问'), true);
   assert.equal(page.all('.result-variant').length, 0);
+  const renameClick = page.fire(group.querySelector('.result-host'), 'click');
+  assert.equal(renameClick.defaultPrevented, true);
+  assert.equal(group.open, false);
+  assert.equal(page.all('.result-variant').length, 0);
+  assert.deepEqual(page.opened, []);
+  const renameDialog = page.one('dialog[open]');
+  assert.equal(renameDialog.querySelector('input').value, 'example.com');
+  assert.equal(page.button('还原原名', renameDialog).disabled, true);
+  page.button('取消', renameDialog).click();
   page.expandTitleGroups();
   const rows = page.all('.result-variant');
   assert.equal(rows.length, 2);
@@ -406,9 +505,94 @@ test('same-title choices expose the distinguishing parameter while preserving ad
   assert.equal(group.textContent.includes('差异'), false);
   assert.equal(group.textContent.includes('详情'), false);
   const checkbox = page.one('.view-option input');
-  checkbox.checked = true;
+  checkbox.checked = false;
   page.fire(checkbox, 'change');
   assert.deepEqual(page.all('.result-variant-link').map((link) => link.textContent), ['lang：未指定', 'lang：zh']);
+});
+
+test('display options use positive state, persist preferences, and keep the open control through refreshes', async () => {
+  for (const file of ['popup.html', 'history.html']) {
+    const page = await createPage({ file, items: [pageItem('页面', 'page')],
+      saved: { query: '', range: 'all', showMinimalMode: true } });
+    const menu = page.one('.view-menu');
+    const trigger = menu.querySelector('summary');
+    const checkbox = page.one('.view-option input');
+    assert.equal(checkbox.checked, false);
+    assert.equal(page.document.body.classList.contains('minimal-mode'), true);
+    assert.equal(checkbox.parentElement.textContent, '显示网址路径');
+    trigger.focus();
+    page.fire(trigger, 'keydown', { key: 'ArrowDown' });
+    assert.equal(menu.open, true);
+    assert.equal(page.document.activeElement, checkbox);
+    checkbox.checked = true;
+    page.fire(checkbox, 'change');
+    await settle();
+    assert.equal(page.document.body.classList.contains('minimal-mode'), false);
+    assert.equal(page.writes.at(-1).showMinimalMode, false);
+    assert.equal(menu.open, true);
+    page.listeners.runtime[0]({ type: imports.HISTORY_INDEX_UPDATED_MESSAGE, revision: 2 });
+    await page.flush();
+    assert.equal(page.one('.view-menu'), menu);
+    assert.equal(page.document.activeElement, checkbox);
+    assert.equal(menu.open, true);
+    assert.equal(checkbox.checked, true);
+    page.fire(checkbox, 'keydown', { key: 'Escape' });
+    assert.equal(menu.open, false);
+    assert.equal(page.document.activeElement, trigger);
+    menu.open = true;
+    page.one('[data-select-id="sort-order"] .select-combobox-button').click();
+    assert.equal(menu.open, false);
+    menu.open = true;
+    page.one('#query').focus();
+    assert.equal(menu.open, false);
+  }
+});
+
+test('group display checkbox reflects all, partial and empty states without closing the menu', async () => {
+  const page = await createPage({ items: [
+    pageItem('分组 A', 'a1'), pageItem('分组 A', 'a2'),
+    pageItem('分组 B', 'b1'), pageItem('分组 B', 'b2')
+  ] });
+  const checkbox = page.one('#expand-groups');
+  const pathCheckbox = page.one('#show-url-path');
+  const menu = page.one('.view-menu');
+  assert.equal(checkbox.disabled, false);
+  assert.equal(checkbox.checked, false);
+  assert.equal(checkbox.indeterminate, false);
+  const groups = page.all('.title-group-details');
+  groups[0].open = true;
+  page.fire(groups[0], 'toggle');
+  assert.equal(checkbox.checked, false);
+  assert.equal(checkbox.indeterminate, true);
+  menu.open = true;
+  checkbox.focus();
+  checkbox.checked = true;
+  page.fire(checkbox, 'change');
+  for (const group of groups) page.fire(group, 'toggle');
+  assert.ok(groups.every((group) => group.open));
+  assert.equal(page.all('.result-variant').length, 4);
+  assert.equal(checkbox.checked, true);
+  assert.equal(checkbox.indeterminate, false);
+  assert.equal(pathCheckbox.checked, true);
+  assert.equal(menu.open, true);
+  assert.equal(page.document.activeElement, checkbox);
+  checkbox.checked = false;
+  page.fire(checkbox, 'change');
+  for (const group of groups) page.fire(group, 'toggle');
+  assert.ok(groups.every((group) => !group.open));
+  assert.equal(checkbox.checked, false);
+  assert.equal(checkbox.indeterminate, false);
+  assert.equal(menu.open, true);
+  page.expandTitleGroups();
+  assert.equal(checkbox.checked, true);
+  groups[0].open = false;
+  page.fire(groups[0], 'toggle');
+  assert.equal(checkbox.indeterminate, true);
+  page.input('没有匹配项');
+  await page.flush();
+  assert.equal(checkbox.disabled, true);
+  assert.equal(checkbox.checked, false);
+  assert.equal(checkbox.indeterminate, false);
 });
 
 test('merge request choices show destination names instead of the repeated repository path', async () => {
@@ -524,16 +708,16 @@ test('late preferences preserve a user search and display preferences chosen aft
   page.input('当前');
   await page.flush();
   assert.deepEqual(page.titles(), ['当前页面']);
-  page.button('仅已命名').click();
+  await page.changeRenamedOnly(true);
   await settle();
   const checkbox = page.one('.view-option input');
-  checkbox.checked = true;
+  checkbox.checked = false;
   page.fire(checkbox, 'change');
   await page.changeSort('name');
   preferences.resolve({ query: '旧查询', range: 'day', showRenamedOnly: false, showMinimalMode: false, sortOrder: 'visits' });
   await settle();
   assert.equal(page.one('#query').value, '当前');
-  assert.equal(page.button('仅已命名').getAttribute('aria-pressed'), 'true');
+  assert.equal(page.one('#renamed-only').checked, true);
   assert.equal(page.document.body.classList.contains('minimal-mode'), true);
   assert.equal(page.writes.at(-1).query, '当前');
   assert.equal(page.writes.at(-1).showRenamedOnly, true);

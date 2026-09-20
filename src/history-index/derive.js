@@ -4,7 +4,7 @@ import {
 } from '../history-utils.js';
 import { projectPageItems } from './project.js';
 
-export const HISTORY_INDEX_ALGORITHM_VERSION = 8;
+export const HISTORY_INDEX_ALGORITHM_VERSION = 9;
 export const HISTORY_INDEX_RANGES = ['all'];
 
 export async function buildHistoryIndex(rawItems, options = {}) {

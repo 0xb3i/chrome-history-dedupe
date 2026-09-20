@@ -616,3 +616,21 @@ function createStorageChrome(values, sessionValues = {}, hooks = {}) {
     }
   };
 }
+
+test('incomplete visits cannot replace a useful saved name and valid renames still update', async () => {
+  const url = 'https://space.bilibili.com/673779175';
+  const values = {};
+  globalThis.chrome = createStorageChrome(values);
+  try {
+    await saveCapturedPageTitles([{ key: url, title: '量子位的个人空间', updatedAt: 100 }]);
+    for (const title of [url, 'space.bilibili.com/673779175', '', 'Loading...', '加载中…']) {
+      await saveCapturedPageTitles([{ key: url, title, updatedAt: 200 }]);
+    }
+    assert.equal(values[CAPTURED_PAGE_TITLES_STORAGE_KEY][url].title, '量子位的个人空间');
+    await saveCapturedPageTitles([
+      { key: url, title: '量子位的新名称', updatedAt: 300 },
+      { key: url, title: url, updatedAt: 400 }
+    ]);
+    assert.equal(values[CAPTURED_PAGE_TITLES_STORAGE_KEY][url].title, '量子位的新名称');
+  } finally { delete globalThis.chrome; }
+});

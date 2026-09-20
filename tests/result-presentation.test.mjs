@@ -1,6 +1,31 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeLinkChoices, groupItemsByDisplayTitle } from '../src/result-presentation.js';
+import { createHighlightedExcerpt, describeLinkChoices, groupItemsByDisplayTitle } from '../src/result-presentation.js';
+
+test('long highlighted titles use a bounded excerpt near the first match and preserve input ranges', () => {
+  for (const prefix of ['', '说明'.repeat(300)]) {
+    const text = `${prefix}目标页面${'后文'.repeat(300)}目标页面`;
+    const ranges = Object.freeze([Object.freeze([prefix.length, prefix.length + 4]),
+      Object.freeze([text.length - 4, text.length])]);
+    const excerpt = createHighlightedExcerpt(text, ranges);
+    assert.ok(excerpt.text.length <= 162);
+    assert.equal(excerpt.text.startsWith('…'), Boolean(prefix));
+    assert.ok(excerpt.text.endsWith('…'));
+    assert.deepEqual(excerpt.ranges.map(([start, end]) => excerpt.text.slice(start, end)), ['目标页面']);
+    assert.equal(ranges[0][0], prefix.length);
+  }
+});
+
+test('excerpts retain local matches, short titles and unmatched text without breaking emoji', () => {
+  const short = '资料：目标页面';
+  assert.deepEqual(createHighlightedExcerpt(short, [[3, 7]]), { text: short, ranges: [[3, 7]] });
+  const text = `${'前'.repeat(200)}😀${'文'.repeat(23)}目标 页面${'😀'.repeat(100)}`;
+  const ranges = [[225, 227], [228, 230]];
+  const excerpt = createHighlightedExcerpt(text, ranges);
+  assert.deepEqual(excerpt.ranges.map(([start, end]) => excerpt.text.slice(start, end)), ['目标', '页面']);
+  assert.equal(excerpt.text.isWellFormed(), true);
+  assert.deepEqual(createHighlightedExcerpt(text), { text, ranges: [] });
+});
 
 function item(path, extra = {}) {
   return Object.freeze({ title: 'ModelHub 平台', url: `https://gpt.example.com/${path}`, ...extra });

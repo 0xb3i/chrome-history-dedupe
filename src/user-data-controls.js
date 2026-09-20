@@ -47,7 +47,7 @@ export function initializeUserDataControls(document) {
         // Keep the blob alive until the browser has started the download.
         setTimeout(() => URL.revokeObjectURL(url), 30000);
       }
-      showStatus('已发起备份下载，包含重命名、分组名称和置顶。');
+      showStatus('已发起备份下载，包含重命名、自动采集标题、分组名称和置顶。');
     } catch (error) {
       showStatus(`备份失败：${error.message || '请重试。'}`, true);
     } finally {
@@ -73,7 +73,7 @@ export function initializeUserDataControls(document) {
         throw new Error('备份文件不是有效的 JSON。');
       }
       const counts = await importUserDataBackup(backup);
-      showStatus(`恢复完成：现有 ${counts.titles} 条重命名、${counts.groups} 个分组名称、${counts.pins} 条置顶。已有名称已保留。`);
+      showStatus(`恢复完成：现有 ${counts.titles} 条重命名、${counts.groups} 个分组名称、${counts.pins} 条置顶、${counts.capturedTitles} 条自动采集标题。已有名称已保留。`);
     } catch (error) {
       showStatus(`恢复失败：${error.message || '请检查备份文件后重试。'}`, true);
     } finally {

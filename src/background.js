@@ -1,6 +1,7 @@
 import {
   getHistoryItemCapturedTitleKey,
-  getHistoryItemTitleOverrideKey
+  getHistoryItemTitleOverrideKey,
+  getMeaningfulPageTitle
 } from './history-utils.js';
 import {
   CAPTURED_PAGE_TITLES_STORAGE_KEY,
@@ -190,14 +191,15 @@ async function flushPendingCapturedTitles() {
 }
 
 function isCapturableTab(tab) {
-  return /^(https?|file):/i.test(String(tab?.url ?? '')) && Boolean(String(tab?.title ?? '').trim());
+  return !tab?.incognito && /^(https?|file):/i.test(String(tab?.url ?? '')) &&
+    Boolean(getMeaningfulPageTitle(tab?.title, tab?.url));
 }
 
 async function openRenameWindowForCurrentPage(requestId) {
   try {
     const tab = await getActiveTab();
 
-    if (requestId !== latestRenameRequestId || !tab?.url) {
+    if (requestId !== latestRenameRequestId || !tab?.url || tab.incognito) {
       return;
     }
 

@@ -31,7 +31,7 @@ async function createControls(options = {}) {
     },
     async importUserDataBackup(backup) {
       imports.push(backup);
-      return options.importBackup ? options.importBackup(backup) : { titles: 2, groups: 1, pins: 3 };
+      return options.importBackup ? options.importBackup(backup) : { titles: 2, groups: 1, pins: 3, capturedTitles: 4 };
     }
   });
   vm.runInContext(executable, context);
@@ -62,6 +62,7 @@ test('imports parsed backup, reports total counts and permits selecting the same
   await settle();
   assert.equal(JSON.stringify(ui.imports[0]), text);
   assert.match(ui.one('#user-data-status').textContent, /现有 2 条重命名、1 个分组名称、3 条置顶/);
+  assert.match(ui.one('#user-data-status').textContent, /4 条自动采集标题/);
   assert.equal(ui.one('#user-data-status').dataset.error, 'false');
   assert.equal(ui.one('#user-data-status').hidden, false);
   assert.equal(ui.one('#user-data-file').value, '');

@@ -36,8 +36,9 @@ import {
 import { createSearchState } from './search-state.js';
 import { createRenameSession } from './rename-session.js';
 import { createHistoryPageInitializer } from './history-page-init.js';
-import { describeLinkChoices, groupItemsByDisplayTitle } from './result-presentation.js';
+import { createHighlightedExcerpt, describeLinkChoices, groupItemsByDisplayTitle } from './result-presentation.js';
 import { createLiveSearch } from './live-search.js';
+import { createSelectControl } from './select-control.js';
 import { initializeUserDataControls } from './user-data-controls.js';
 
 const SNAPSHOT_RENDER_DEBOUNCE_MS = 50;
@@ -47,6 +48,7 @@ const historyIndexStore = createHistoryIndexStore();
 const form = document.querySelector('#search-form');
 const queryInput = document.querySelector('#query');
 const rangeSelect = document.querySelector('#range');
+const renamedOnlyCheckbox = document.querySelector('#renamed-only');
 const shortcutSettingsButton = document.querySelector('#shortcut-settings');
 const statusPill = document.querySelector('#status-pill');
 const summary = document.querySelector('#summary');
@@ -66,6 +68,7 @@ const renameDialog = createRenameDialog();
 const groupRenameDialog = createGroupRenameDialog();
 let currentGroups = [];
 let rangeDropdown = null;
+let sortDropdown = null;
 let pinnedUrlKeys = new Set();
 let groupNameOverrides = new Map();
 let titleOverrides = new Map();
@@ -109,6 +112,8 @@ const pageInitializer = createHistoryPageInitializer({
       sortOrder = !isPopup && savedSort === 'default' ? 'recent' : savedSort;
     }
     document.querySelector('#sort-order').value = sortOrder;
+    sortDropdown.sync();
+    renamedOnlyCheckbox.checked = showRenamedOnly;
     syncMinimalModePresentation();
     if (!isInitialized) {
       addStorageChangeListener();
@@ -142,7 +147,7 @@ const liveSearch = createLiveSearch({
 });
 
 results.addEventListener('toggle', () => updateCollapseControl(), true);
-document.addEventListener('click', (event) => {
+for (const type of ['click', 'focusin']) document.addEventListener(type, (event) => {
   const menu = summary.querySelector('.view-menu');
   if (menu && !menu.contains(event.target)) menu.open = false;
 });
@@ -169,12 +174,14 @@ const otherYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
 queryInput.addEventListener('input', (event) => liveSearch.input(event));
 queryInput.addEventListener('compositionstart', () => liveSearch.compositionStart());
 queryInput.addEventListener('compositionend', () => liveSearch.compositionEnd());
-rangeSelect.addEventListener('change', () => {
-  syncRangeSelect();
+rangeSelect.addEventListener('change', () => liveSearch.change());
+rangeDropdown = createSelectControl(rangeSelect, { label: '时间筛选' });
+document.querySelector('#result-controls').append(createSortControl(), createViewMenu());
+renamedOnlyCheckbox.addEventListener('change', () => {
+  showRenamedOnly = renamedOnlyCheckbox.checked;
+  editedDisplayPreferences.add('renamed');
   liveSearch.change();
 });
-setupRangeSelect();
-rangeSelect.closest('.field').after(createSortControl());
 form.addEventListener('submit', (event) => {
   event.preventDefault();
   liveSearch.submit();
@@ -269,172 +276,8 @@ function selectQueryInputOnPopupOpen() {
 function setRangeSelectValue(value) {
   if ([...rangeSelect.options].some((option) => option.value === value)) {
     rangeSelect.value = value;
-    syncRangeSelect();
+    rangeDropdown.sync();
   }
-}
-
-function setupRangeSelect() {
-  if (!rangeSelect) {
-    return;
-  }
-
-  const wrapper = document.createElement('div');
-  wrapper.className = 'range-combobox';
-
-  const button = document.createElement('button');
-  button.className = 'range-combobox-button';
-  button.type = 'button';
-  button.setAttribute('aria-haspopup', 'listbox');
-  button.setAttribute('aria-label', '时间筛选');
-  button.setAttribute('aria-expanded', 'false');
-
-  const value = document.createElement('span');
-  value.className = 'range-combobox-value';
-
-  const arrow = document.createElement('span');
-  arrow.className = 'range-combobox-arrow';
-  arrow.setAttribute('aria-hidden', 'true');
-
-  const menu = document.createElement('div');
-  menu.className = 'range-combobox-menu';
-  menu.hidden = true;
-  menu.setAttribute('role', 'listbox');
-  menu.setAttribute('aria-label', '时间筛选');
-
-  const options = [...rangeSelect.options].map((selectOption) => {
-    const option = document.createElement('button');
-    option.className = 'range-combobox-option';
-    option.type = 'button';
-    option.textContent = selectOption.textContent;
-    option.dataset.value = selectOption.value;
-    option.setAttribute('role', 'option');
-    option.addEventListener('click', () => {
-      rangeSelect.value = selectOption.value;
-      rangeSelect.dispatchEvent(new Event('change', { bubbles: true }));
-      closeRangeSelect();
-      button.focus();
-    });
-    option.addEventListener('keydown', (event) => {
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        focusRelativeRangeOption(option, event.key === 'ArrowDown' ? 1 : -1);
-      } else if (event.key === 'Home' || event.key === 'End') {
-        event.preventDefault();
-        focusBoundaryRangeOption(event.key === 'Home' ? 'first' : 'last');
-      } else if (event.key === 'Escape') {
-        event.preventDefault();
-        closeRangeSelect();
-        button.focus();
-      }
-    });
-    menu.append(option);
-    return option;
-  });
-
-  button.append(value, arrow);
-  wrapper.append(button, menu);
-  rangeSelect.classList.add('native-select-hidden');
-  rangeSelect.tabIndex = -1;
-  rangeSelect.setAttribute('aria-hidden', 'true');
-  rangeSelect.insertAdjacentElement('afterend', wrapper);
-  rangeDropdown = { button, menu, options, value, wrapper };
-
-  button.addEventListener('click', () => {
-    if (menu.hidden) {
-      openRangeSelect();
-    } else {
-      closeRangeSelect();
-    }
-  });
-  button.addEventListener('keydown', (event) => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') {
-      return;
-    }
-
-    event.preventDefault();
-    openRangeSelect();
-    focusSelectedRangeOption(event.key === 'ArrowDown' ? 1 : -1);
-  });
-  document.addEventListener('click', (event) => {
-    if (!wrapper.contains(event.target)) {
-      closeRangeSelect();
-    }
-  });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape') {
-      closeRangeSelect();
-    }
-  });
-  syncRangeSelect();
-}
-
-function openRangeSelect() {
-  if (!rangeDropdown) {
-    return;
-  }
-
-  rangeDropdown.menu.hidden = false;
-  rangeDropdown.button.setAttribute('aria-expanded', 'true');
-}
-
-function closeRangeSelect() {
-  if (!rangeDropdown) {
-    return;
-  }
-
-  rangeDropdown.menu.hidden = true;
-  rangeDropdown.button.setAttribute('aria-expanded', 'false');
-}
-
-function syncRangeSelect() {
-  if (!rangeDropdown) {
-    return;
-  }
-
-  const selected = [...rangeSelect.options].find((option) => option.value === rangeSelect.value);
-  const selectedLabel = selected?.textContent ?? '';
-  rangeDropdown.value.textContent = selectedLabel;
-  rangeDropdown.button.title = selectedLabel;
-  rangeDropdown.button.setAttribute('aria-label', `时间筛选：${selectedLabel}`);
-
-  for (const option of rangeDropdown.options) {
-    const isSelected = option.dataset.value === rangeSelect.value;
-    option.setAttribute('aria-selected', String(isSelected));
-  }
-}
-
-function focusSelectedRangeOption(direction) {
-  if (!rangeDropdown) {
-    return;
-  }
-
-  const selectedIndex = rangeDropdown.options.findIndex(
-    (option) => option.dataset.value === rangeSelect.value
-  );
-  const fallbackIndex = direction > 0 ? 0 : rangeDropdown.options.length - 1;
-  rangeDropdown.options[selectedIndex >= 0 ? selectedIndex : fallbackIndex]?.focus();
-}
-
-function focusRelativeRangeOption(currentOption, direction) {
-  if (!rangeDropdown) {
-    return;
-  }
-
-  const currentIndex = rangeDropdown.options.indexOf(currentOption);
-  const nextIndex = Math.min(
-    rangeDropdown.options.length - 1,
-    Math.max(0, currentIndex + direction)
-  );
-  rangeDropdown.options[nextIndex]?.focus();
-}
-
-function focusBoundaryRangeOption(boundary) {
-  if (!rangeDropdown) {
-    return;
-  }
-
-  const index = boundary === 'first' ? 0 : rangeDropdown.options.length - 1;
-  rangeDropdown.options[index]?.focus();
 }
 
 async function rememberCurrentSearchState(state = searchSnapshot) {
@@ -459,20 +302,18 @@ async function rememberCurrentSearchState(state = searchSnapshot) {
 }
 
 function renderSummary() {
-  const count = document.createElement('span');
-  count.className = 'result-count';
-  count.setAttribute('role', 'status');
-  count.textContent = `${currentGroups.reduce((total, group) => total + group.itemCount, 0)} 条结果`;
-  summary.replaceChildren(
-    count,
-    createRenameMetric(),
-    createViewMenu()
-  );
+  const count = summary.querySelector('.result-count');
+  const total = currentGroups.reduce((total, group) => total + group.itemCount, 0);
+  count.textContent = `${total.toLocaleString('zh-CN')} 条结果`;
+  renamedOnlyCheckbox.checked = showRenamedOnly;
+  syncMinimalModePresentation();
+  updateCollapseControl();
 }
 
 function renderResults(groups) {
   results.replaceChildren();
   if (groups.length === 0) {
+    updateCollapseControl();
     renderEmptyState();
     return;
   }
@@ -553,7 +394,7 @@ function createTitleGroupItem(entry, groupKey) {
   title.href = representative.url;
   title.target = '_blank';
   title.rel = 'noreferrer';
-  title.title = `打开访问最多的链接：${representative.url}`;
+  title.title = `${entry.title}\n打开访问最多的链接：${representative.url}`;
   title.addEventListener('click', (event) => event.stopPropagation());
   content.append(title, createResultMeta(entry, { aggregate: true, groupKey }));
   appendMatchReason(content, entry.items[0]);
@@ -667,6 +508,7 @@ function createResultItem(item, groupKey, { distinguishUrl = false, choice = nul
     title.setAttribute('aria-label', `${choice.label}${choice.secondary ? `，${choice.secondary}` : ''}，打开链接：${item.url}`);
   } else {
     appendHighlightedText(title, item.title || item.url || '(无标题)', item.searchMatch?.titleRanges);
+    if (item.title && item.title !== item.url) title.title = `${item.title}\n${item.url || ''}`;
   }
 
   titleRow.append(title);
@@ -700,6 +542,7 @@ function createResultItem(item, groupKey, { distinguishUrl = false, choice = nul
 }
 
 function appendHighlightedText(element, text, ranges = []) {
+  ({ text, ranges } = createHighlightedExcerpt(text, ranges));
   let offset = 0;
   for (const [start, end] of ranges) {
     element.append(document.createTextNode(text.slice(offset, start)));
@@ -726,7 +569,7 @@ function appendMatchReason(content, item) {
 }
 
 function createResultHost(groupKey) {
-  const host = document.createElement(isPopup ? 'span' : 'button');
+  const host = document.createElement('button');
   host.className = 'result-host';
   const label = groupNameOverrides.get(groupKey) || groupKey;
   // Keep source colors stable across sorting, filtering and custom group names.
@@ -735,15 +578,16 @@ function createResultHost(groupKey) {
   host.dataset.sourceTone = String(hash % 6);
   host.dataset.groupKey = groupKey;
   host.title = label === groupKey ? groupKey : `${label}（${groupKey}）`;
-  host.setAttribute('aria-label', `所属分组：${host.title}`);
-  if (!isPopup) {
-    host.type = 'button';
-    host.title += ' · 点击修改分组名';
-    host.setAttribute('aria-label', `修改分组名：${label}`);
-    host.addEventListener('click', () => renameGroup({
+  host.type = 'button';
+  host.title += ' · 点击修改分组名';
+  host.setAttribute('aria-label', `修改分组名：${label}`);
+  host.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    renameGroup({
       key: groupKey, label, originalLabel: groupKey, isGroupRenamed: groupNameOverrides.has(groupKey)
-    }));
-  }
+    });
+  });
   const text = document.createElement('span');
   text.className = 'result-host-label';
   text.textContent = label;
@@ -957,26 +801,6 @@ function createBaseIcon() {
   return icon;
 }
 
-function createRenameMetric() {
-  const metric = document.createElement('button');
-  metric.className = 'metric metric-button';
-  metric.type = 'button';
-  metric.setAttribute('aria-pressed', String(showRenamedOnly));
-  metric.title = showRenamedOnly ? '显示全部页面' : '只显示已重命名页面';
-
-  const metricLabel = document.createElement('span');
-  metricLabel.textContent = '仅已命名';
-
-  metric.append(metricLabel);
-  metric.addEventListener('click', () => {
-    showRenamedOnly = !showRenamedOnly;
-    editedDisplayPreferences.add('renamed');
-    liveSearch.change();
-  });
-
-  return metric;
-}
-
 function createSortControl() {
   const label = document.createElement('label');
   label.className = 'field sort-control';
@@ -987,9 +811,9 @@ function createSortControl() {
   select.id = 'sort-order';
   select.setAttribute('aria-label', '排序方式');
   for (const [value, text] of [
-    ...(isPopup ? [['default', '默认排序']] : []),
-    ['visits', '点击次数 ↓'],
-    ['recent', '上次访问 ↓'],
+    ...(isPopup ? [['default', '综合排序']] : []),
+    ['visits', '访问最多'],
+    ['recent', '最近访问'],
     ['name', '名称升序']
   ]) {
     const option = document.createElement('option');
@@ -1006,6 +830,7 @@ function createSortControl() {
     void rememberCurrentSearchState();
   });
   label.append(caption, select);
+  sortDropdown = createSelectControl(select, { label: '排序方式' });
   return label;
 }
 
@@ -1014,53 +839,72 @@ function createViewMenu() {
   menu.className = 'view-menu';
   const trigger = document.createElement('summary');
   trigger.className = 'view-menu-trigger';
-  trigger.textContent = '显示';
+  trigger.textContent = '显示选项';
   const panel = document.createElement('div');
   panel.className = 'view-menu-panel';
   const label = document.createElement('label');
   label.className = 'view-option';
   const checkbox = document.createElement('input');
   checkbox.type = 'checkbox';
-  checkbox.checked = showMinimalMode;
+  checkbox.id = 'show-url-path';
+  checkbox.checked = !showMinimalMode;
   checkbox.addEventListener('change', () => {
-    showMinimalMode = checkbox.checked;
+    showMinimalMode = !checkbox.checked;
     editedDisplayPreferences.add('minimal');
     syncMinimalModePresentation();
     void rememberCurrentSearchState();
   });
-  label.append(checkbox, document.createTextNode('隐藏网址路径'));
+  label.append(document.createTextNode('显示网址路径'), checkbox);
   panel.append(label);
-  if (isPopup) panel.append(createCollapseMetric());
+  if (isPopup) panel.append(createCollapseControl());
+  menu.addEventListener('keydown', (event) => {
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    menu.open = true;
+    const controls = [...panel.querySelectorAll('input, button')].filter((control) => !control.disabled);
+    const index = controls.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? controls.length - 1
+      : index < 0 ? (event.key === 'ArrowUp' ? controls.length - 1 : 0)
+        : Math.max(0, Math.min(controls.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
+    controls[next]?.focus();
+  });
   menu.append(trigger, panel);
   return menu;
 }
 
 function syncMinimalModePresentation() {
   document.body.classList.toggle('minimal-mode', showMinimalMode);
+  const checkbox = summary.querySelector('#show-url-path');
+  if (checkbox) checkbox.checked = !showMinimalMode;
 }
 
-function createCollapseMetric() {
-  const metric = document.createElement('button');
-  metric.className = 'view-collapse-button';
-  metric.type = 'button';
-  metric.disabled = currentGroups.length === 0;
-  metric.textContent = '折叠全部';
-  metric.addEventListener('click', () => {
-    const details = [...results.querySelectorAll('details')];
-    const shouldExpand = !details.some((element) => element.open);
-    expandedTitleGroups.clear();
-    details.forEach((element) => { element.open = shouldExpand; });
+function createCollapseControl() {
+  const label = document.createElement('label');
+  label.className = 'view-option';
+  label.title = '仅作用于当前已加载的同名分组';
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.id = 'expand-groups';
+  checkbox.disabled = true;
+  checkbox.addEventListener('change', () => {
+    const expand = checkbox.checked;
+    const details = [...results.querySelectorAll('.title-group-details')];
+    if (!expand) expandedTitleGroups.clear();
+    details.forEach((element) => { element.open = expand; });
     updateCollapseControl();
   });
-
-  return metric;
+  label.append(document.createTextNode('展开全部分组'), checkbox);
+  return label;
 }
 
 function updateCollapseControl() {
-  const button = summary.querySelector('.view-collapse-button');
-  if (!button) return;
-  button.disabled = !results.querySelector('details');
-  button.textContent = results.querySelector('details[open]') ? '折叠全部' : '展开全部';
+  const checkbox = summary.querySelector('#expand-groups');
+  if (!checkbox) return;
+  const details = [...results.querySelectorAll('.title-group-details')];
+  const expandedCount = details.filter((element) => element.open).length;
+  checkbox.disabled = details.length === 0;
+  checkbox.checked = details.length > 0 && expandedCount === details.length;
+  checkbox.indeterminate = expandedCount > 0 && expandedCount < details.length;
 }
 
 function createTag(text) {
@@ -1130,6 +974,7 @@ function renderEmptyState() {
   }));
   if (showRenamedOnly) actions.append(createRecoveryButton('清除筛选', () => {
     showRenamedOnly = false;
+    renamedOnlyCheckbox.checked = false;
     editedDisplayPreferences.add('renamed');
     setRangeSelectValue('all');
     liveSearch.change();

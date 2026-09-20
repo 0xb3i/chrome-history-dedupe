@@ -1,5 +1,5 @@
 import { getPageIdentityKey } from './page-identity.js';
-import { normalizeSearchRange, normalizeSortOrder } from './history-utils.js';
+import { getMeaningfulPageTitle, normalizeSearchRange, normalizeSortOrder } from './history-utils.js';
 
 export const PINNED_URLS_STORAGE_KEY = 'deduped-history-pinned-urls';
 export const TITLE_OVERRIDES_STORAGE_KEY = 'deduped-history-title-overrides';
@@ -18,9 +18,10 @@ const STORAGE_MUTATION_LOCK_NAME = 'deduped-history-storage-mutation';
 const storageMutationQueues = new Map();
 
 // Backup operations share the same locks as normal edits and publish all user
-// annotations in one storage write. Captured titles and indexes are rebuildable.
+// annotations and captured titles in one storage write. Indexes are rebuildable.
 const USER_DATA_LOCK_KEYS = [
-  TITLE_OVERRIDES_STORAGE_KEY, GROUP_NAME_OVERRIDES_STORAGE_KEY, PINNED_URLS_STORAGE_KEY
+  TITLE_OVERRIDES_STORAGE_KEY, GROUP_NAME_OVERRIDES_STORAGE_KEY, PINNED_URLS_STORAGE_KEY,
+  CAPTURED_PAGE_TITLES_STORAGE_KEY
 ].sort();
 
 function withUserDataLocks(callback, index = 0) {
@@ -30,14 +31,16 @@ function withUserDataLocks(callback, index = 0) {
 
 export async function readUserDataForBackup() {
   return withUserDataLocks(async () => {
-    const [{ overrides }, groups, pins] = await Promise.all([
-      readTitleOverridesForMutation(), loadGroupNameOverrides(), loadPinnedUrlKeys()
+    const [{ overrides }, groups, pins, captured] = await Promise.all([
+      readTitleOverridesForMutation(), loadGroupNameOverrides(), loadPinnedUrlKeys(),
+      getStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, {})
     ]);
     return {
       [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(overrides),
       [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION,
       [GROUP_NAME_OVERRIDES_STORAGE_KEY]: Object.fromEntries(groups),
-      [PINNED_URLS_STORAGE_KEY]: [...pins]
+      [PINNED_URLS_STORAGE_KEY]: [...pins],
+      [CAPTURED_PAGE_TITLES_STORAGE_KEY]: serializeCapturedTitleRecords(normalizeCapturedTitleRecords(captured))
     };
   });
 }
@@ -45,25 +48,37 @@ export async function readUserDataForBackup() {
 // Called after the backup boundary has validated the entire payload.
 export async function mergeUserDataFromBackup(data) {
   return withUserDataLocks(async () => {
-    const [{ overrides: currentTitles }, currentGroups, currentPins] = await Promise.all([
-      readTitleOverridesForMutation(), loadGroupNameOverrides(), loadPinnedUrlKeys()
+    const [{ overrides: currentTitles }, currentGroups, currentPins, currentCaptured] = await Promise.all([
+      readTitleOverridesForMutation(), loadGroupNameOverrides(), loadPinnedUrlKeys(),
+      getStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, {})
     ]);
     const titles = normalizePageTitleOverrideRecords(data[TITLE_OVERRIDES_STORAGE_KEY],
       data[TITLE_OVERRIDES_MIGRATION_STORAGE_KEY] < TITLE_OVERRIDES_MIGRATION_VERSION);
     const groups = normalizeTitleOverrideMap(data[GROUP_NAME_OVERRIDES_STORAGE_KEY]);
+    const captured = normalizeCapturedTitleRecords(data[CAPTURED_PAGE_TITLES_STORAGE_KEY]);
     // Existing annotations win even if a backup carries a newer timestamp.
     // An import must never silently undo a user's current edits.
     for (const [key, value] of currentTitles) titles.set(key, value);
     for (const [key, value] of currentGroups) groups.set(key, value);
+    for (const [key, value] of normalizeCapturedTitleRecords(currentCaptured)) captured.set(key, value);
+    const capturedRecords = serializeCapturedTitleRecords(captured);
     const pins = new Set([...currentPins, ...normalizePinnedPageKeys(data[PINNED_URLS_STORAGE_KEY])]);
     await setStorageValues({
       [TITLE_OVERRIDES_STORAGE_KEY]: serializePageTitleOverrides(titles),
       [TITLE_OVERRIDES_MIGRATION_STORAGE_KEY]: TITLE_OVERRIDES_MIGRATION_VERSION,
       [GROUP_NAME_OVERRIDES_STORAGE_KEY]: Object.fromEntries(groups),
-      [PINNED_URLS_STORAGE_KEY]: [...pins]
+      [PINNED_URLS_STORAGE_KEY]: [...pins],
+      [CAPTURED_PAGE_TITLES_STORAGE_KEY]: capturedRecords
     });
-    return { titles: titles.size, groups: groups.size, pins: pins.size };
+    return { titles: titles.size, groups: groups.size, pins: pins.size,
+      capturedTitles: Object.keys(capturedRecords).length };
   });
+}
+
+function serializeCapturedTitleRecords(records) {
+  return Object.fromEntries([...records]
+    .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
+    .slice(0, MAX_CAPTURED_PAGE_TITLES));
 }
 
 export async function loadPinnedUrlKeys() {
@@ -167,10 +182,7 @@ export async function saveCapturedPageTitles(entries) {
       return;
     }
 
-    const recentRecords = [...records]
-      .sort(([, left], [, right]) => right.updatedAt - left.updatedAt)
-      .slice(0, MAX_CAPTURED_PAGE_TITLES);
-    await setStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, Object.fromEntries(recentRecords));
+    await setStorageValue(CAPTURED_PAGE_TITLES_STORAGE_KEY, serializeCapturedTitleRecords(records));
   });
 }
 
@@ -473,7 +485,9 @@ function normalizeCapturedTitleRecords(value) {
 
   for (const [key, record] of entries) {
     const normalizedKey = normalizeStorageKey(key);
-    const normalizedTitle = normalizeTitle(typeof record === 'string' ? record : record?.title);
+    const normalizedTitle = getMeaningfulPageTitle(
+      typeof record === 'string' ? record : record?.title, normalizedKey, record?.resolvedUrl
+    );
     const updatedAt = typeof record === 'string' ? 0 : Number(record?.updatedAt);
     // Earlier releases inferred redirects from tab updates during loading.
     // Keep their titles, but never promote those unverified URL relationships.
@@ -498,7 +512,7 @@ function normalizeCapturedTitleSaveEntries(entries) {
 
   for (const entry of Array.isArray(entries) ? entries : []) {
     const key = normalizeStorageKey(entry?.key);
-    const title = normalizeTitle(entry?.title);
+    const title = getMeaningfulPageTitle(entry?.title, key, entry?.resolvedUrl);
     const resolvedUrl = normalizeStorageKey(entry?.resolvedUrl);
     const updatedAt = Number(entry?.updatedAt ?? Date.now());
 

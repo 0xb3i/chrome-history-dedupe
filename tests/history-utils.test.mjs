@@ -13,6 +13,7 @@ import {
   getHistoryItemComparator,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
+  getMeaningfulPageTitle,
   groupHistoryItems,
   normalizeHistoryKey,
   normalizeSortOrder,
@@ -353,14 +354,14 @@ test('page family mode preserves independent names for different environment URL
   assert.equal(result.totalVisitCount, 20);
 });
 
-test('history titles remain search-only aliases without affecting display or cross-URL dedupe', () => {
+test('history titles supply missing display names without changing resource identity', () => {
   const items = applyCapturedTitlesToItems([
     { id: 'a', title: 'Docs', url: 'https://example.com/doc/abc12345' },
     { id: 'b', title: 'Docs', url: 'https://example.com/doc/xyz98765' }
   ]);
 
-  assert.equal(items[0].title, '');
-  assert.equal(items[1].title, '');
+  assert.equal(items[0].title, 'Docs');
+  assert.equal(items[1].title, 'Docs');
   assert.equal(filterHistoryItemsByQuery(items, 'Docs').length, 2);
   assert.equal(dedupeHistoryItems(items, 'page-family').length, 2);
 });
@@ -371,7 +372,7 @@ test('a Lark history title is searchable when live title capture is missing', ()
     { title: '评估分析v2', url }
   ]));
 
-  assert.equal(item.title, '');
+  assert.equal(item.title, '评估分析v2');
   assert.deepEqual(item.normalizedSearchTitles, ['评估分析v2']);
   assert.deepEqual(
     filterHistoryItemsByQuery([item], '评估').map((result) => result.url),
@@ -1586,4 +1587,46 @@ test('observed redirect aliases retain annotations while the latest name is proj
   assert.equal(result.totalVisitCount, 3);
   assert.deepEqual(new Set(result.titleOverrideKeys), new Set([finalUrl, ...aliases]));
   assert.equal(projectPageItems([result])[0].title, 'Captured title');
+});
+
+test('automatic names reject address and loading placeholders, not descriptive titles', () => {
+  const url = 'https://example.com/people/123';
+  for (const title of ['', url, 'example.com/people/123', 'example.com', 'Loading...', '加载中…', '正在加载']) {
+    assert.equal(getMeaningfulPageTitle(title, url), '');
+  }
+  for (const title of ['量子位的个人空间', 'Loading JavaScript modules', '加载中的性能问题']) {
+    assert.equal(getMeaningfulPageTitle(title, url), title);
+  }
+});
+
+test('legacy URL captures fall back to a history name as the current search match', () => {
+  const url = 'https://space.bilibili.com/673779175';
+  const items = applyCapturedTitlesToItems([{ url, title: '量子位的个人空间' }],
+    new Map([[url, { title: url }]]));
+  const [result] = filterHistoryItemsByQuery(projectHistoryItems(items), '量子位');
+  assert.equal(result.title, '量子位的个人空间');
+  assert.deepEqual(result.searchMatch.titleRanges, [[0, 3]]);
+  assert.deepEqual(result.searchMatch.aliases, []);
+  assert.equal(result.isTitleRenamed, false);
+});
+
+test('invalid exact capture does not hide a useful same-resource capture', () => {
+  const url = 'https://example.com/docs/123';
+  const alias = `${url}?utm_source=home`;
+  const [item] = applyCapturedTitlesToItems([{ url, title: url }], new Map([
+    [url, { title: url }], [alias, { title: '有效页面名称' }]
+  ]));
+  assert.equal(item.title, '有效页面名称');
+});
+
+test('merged resource keeps a useful member name without changing its representative link', () => {
+  const url = 'https://example.com/docs/123';
+  const items = applyCapturedTitlesToItems([
+    { url, title: url, visitCount: 10 },
+    { url: `${url}?utm_source=home`, title: '恢复的名称', visitCount: 1 }
+  ]);
+  const [result] = projectHistoryItems(items);
+  assert.equal(result.url, url);
+  assert.equal(result.title, '恢复的名称');
+  assert.equal(result.totalVisitCount, 11);
 });

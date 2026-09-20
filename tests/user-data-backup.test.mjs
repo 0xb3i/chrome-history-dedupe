@@ -4,8 +4,11 @@ import { exportUserDataBackup, importUserDataBackup } from '../src/user-data-bac
 import {
   TITLE_OVERRIDES_STORAGE_KEY as T, TITLE_OVERRIDES_MIGRATION_STORAGE_KEY as V,
   GROUP_NAME_OVERRIDES_STORAGE_KEY as G, PINNED_URLS_STORAGE_KEY as P,
-  saveTitleOverride
+  CAPTURED_PAGE_TITLES_STORAGE_KEY as C,
+  saveTitleOverride, saveCapturedPageTitles, loadCapturedPageTitles
 } from '../src/storage.js';
+import { buildHistoryIndex } from '../src/history-index/derive.js';
+import { filterHistoryItemsByQuery } from '../src/history-utils.js';
 
 function storage(values, fail = false) {
   const writes = [];
@@ -34,16 +37,102 @@ test('legacy backup migrates concrete targets, retains annotations and imports a
     const source = backup({ [V]: 3, [T]: {
       'https://example.com/old': { title: '我的资料', targetUrl: 'https://example.com/concrete', updatedAt: 123 }
     }, [G]: { 'example.com': '工作' }, [P]: ['https://example.com/concrete'] });
-    assert.deepEqual(await importUserDataBackup(source), { titles: 1, groups: 1, pins: 1 });
+    assert.deepEqual(await importUserDataBackup(source), { titles: 1, groups: 1, pins: 1, capturedTitles: 0 });
     assert.equal(writes.length, 1);
     assert.equal(values[V], 6);
     assert.deepEqual(values[T]['https://example.com/concrete'], source.data[T]['https://example.com/old']);
     assert.equal(values[T]['https://example.com/old'], undefined);
     const exported = await exportUserDataBackup();
+    assert.equal(exported.version, 2);
     assert.deepEqual(exported.data, values);
     assert.ok(Number.isFinite(Date.parse(exported.exportedAt)));
     await importUserDataBackup(exported);
     assert.deepEqual((await exportUserDataBackup()).data, values);
+  } finally { delete globalThis.chrome; }
+});
+
+test('captured page titles roundtrip as current names without requiring another visit', async () => {
+  const url = 'https://space.bilibili.com/673779175';
+  const title = '量子位的个人空间';
+  const values = { [V]: 6, [C]: { [url]: { title, updatedAt: 100 } } };
+  storage(values);
+  try {
+    const exported = await exportUserDataBackup();
+    assert.equal(exported.version, 2);
+    assert.deepEqual(exported.data[C], values[C]);
+    for (const key of Object.keys(values)) delete values[key];
+    const counts = await importUserDataBackup(exported);
+    assert.equal(counts.capturedTitles, 1);
+    const indexes = await buildHistoryIndex([{ url, title: url, visitCount: 2 }], {
+      capturedPageTitles: await loadCapturedPageTitles(), yieldControl: async () => {}
+    });
+    const [result] = filterHistoryItemsByQuery(indexes.get('all'), '量子位');
+    assert.equal(result.title, title);
+    assert.deepEqual(result.searchMatch.aliases, []);
+  } finally { delete globalThis.chrome; }
+});
+
+test('capture restore preserves current valid names and only restores versioned redirect relationships', async () => {
+  const first = 'https://example.com/first';
+  const second = 'https://example.com/second';
+  const legacy = 'https://example.com/legacy';
+  const final = 'https://example.com/final';
+  const values = { [V]: 6, [C]: {
+    [first]: { title: '当前名称', updatedAt: 10 },
+    [second]: { title: second, updatedAt: 100 }
+  } };
+  storage(values);
+  try {
+    await importUserDataBackup({ ...backup({ [C]: {
+      [first]: { title: '备份名称', updatedAt: 999 },
+      [second]: { title: '恢复名称', updatedAt: 20, resolvedUrl: final, resolutionVersion: 1 },
+      [legacy]: { title: '旧捕获名称', updatedAt: 30, resolvedUrl: final }
+    } }), version: 2 });
+    assert.deepEqual(values[C][first], { title: '当前名称', updatedAt: 10 });
+    assert.deepEqual(values[C][second], {
+      title: '恢复名称', updatedAt: 20, resolvedUrl: final, resolutionVersion: 1
+    });
+    assert.deepEqual(values[C][legacy], { title: '旧捕获名称', updatedAt: 30 });
+    const exported = await exportUserDataBackup();
+    assert.deepEqual(exported.data[C], values[C]);
+  } finally { delete globalThis.chrome; }
+});
+
+test('capture backup validation rejects the entire payload before any annotation changes', async () => {
+  const values = {};
+  const writes = storage(values);
+  try {
+    for (const captured of [undefined, [], null, { page: {} },
+      { page: { title: '标题', updatedAt: 'bad' } },
+      { page: { title: '标题', updatedAt: 10, resolvedUrl: 12 } },
+      { page: { title: '标题', updatedAt: 10, resolutionVersion: '1' } }]) {
+      await assert.rejects(importUserDataBackup({ ...backup({
+        [T]: { 'https://example.com/renamed': '重命名' }, [C]: captured
+      }), version: 2 }));
+    }
+    assert.deepEqual(values, {});
+    assert.equal(writes.length, 0);
+  } finally { delete globalThis.chrome; }
+});
+
+test('capture restoration is bounded and concurrent live capture survives the shared lock', async () => {
+  const values = { [V]: 6 };
+  storage(values);
+  try {
+    const records = Object.fromEntries(Array.from({ length: 5001 }, (_, index) => [
+      `https://example.com/page/${index}`, { title: `页面 ${index}`, updatedAt: index }
+    ]));
+    const exportedBeforeImport = await exportUserDataBackup();
+    assert.deepEqual(exportedBeforeImport.data[C], {});
+    await Promise.all([
+      importUserDataBackup({ ...backup({ [C]: records }), version: 2 }),
+      saveCapturedPageTitles([{ key: 'https://example.com/live', title: '刚加载完成', updatedAt: 6000 }])
+    ]);
+    assert.equal(Object.keys(values[C]).length, 5000);
+    assert.equal(values[C]['https://example.com/live'].title, '刚加载完成');
+    assert.equal(values[C]['https://example.com/page/5000'].title, '页面 5000');
+    assert.equal(values[C]['https://example.com/page/0'], undefined);
+    assert.equal(Object.keys((await exportUserDataBackup()).data[C]).length, 5000);
   } finally { delete globalThis.chrome; }
 });
 

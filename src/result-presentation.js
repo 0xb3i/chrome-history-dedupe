@@ -1,3 +1,21 @@
+// Only the visible excerpt changes; search ranges and stored titles stay intact.
+export function createHighlightedExcerpt(text, ranges = []) {
+  const limit = 160;
+  if (text.length <= limit || !ranges.length) return { text, ranges };
+  let start = Math.max(0, ranges[0][0] - 24);
+  let end = Math.min(text.length, start + limit);
+  // Do not split UTF-16 surrogate pairs at excerpt boundaries.
+  if (/[\uDC00-\uDFFF]/.test(text[start])) start++;
+  if (end < text.length && /[\uDC00-\uDFFF]/.test(text[end])) end--;
+  const prefix = start > 0 ? '…' : '';
+  return {
+    text: `${prefix}${text.slice(start, end)}${end < text.length ? '…' : ''}`,
+    ranges: ranges.filter(([from, to]) => from < end && to > start)
+      .map(([from, to]) => [Math.max(from, start) - start + prefix.length,
+        Math.min(to, end) - start + prefix.length])
+  };
+}
+
 // These buckets only compress the result list. Every member retains its own
 // identity, URL, metadata and actions; a shared title never becomes a storage key.
 export function groupItemsByDisplayTitle(items) {

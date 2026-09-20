@@ -4,10 +4,18 @@ import test from 'node:test';
 
 const manifest = JSON.parse(readFileSync(new URL('../manifest.json', import.meta.url), 'utf8'));
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+const packageLock = JSON.parse(readFileSync(new URL('../package-lock.json', import.meta.url), 'utf8'));
 
 test('manifest and package expose the same user-visible version', () => {
   assert.equal(manifest.version, packageJson.version);
-  assert.equal(manifest.version, '0.13.0');
+  assert.equal(manifest.version, packageLock.version);
+  assert.equal(manifest.version, packageLock.packages[''].version);
+  assert.match(manifest.version, /^[1-9]\d*\.\d+\.\d+$/);
+});
+
+test('release requires CSS :has support and excludes incognito sessions', () => {
+  assert.ok(Number(manifest.minimum_chrome_version) >= 105);
+  assert.equal(manifest.incognito, 'not_allowed');
 });
 
 test('browser action opens the popup page', () => {
