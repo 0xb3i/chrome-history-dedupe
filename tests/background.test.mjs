@@ -12,10 +12,19 @@ test('background excludes incognito capture and rename without breaking normal t
   const privateTab = { id: 2, url: 'https://example.com/private', title: '无痕页面', incognito: true };
   let tabs = [regular, privateTab];
   let injections = 0;
+  let historySearches = 0;
   const event = (name) => ({ addListener(callback) { listeners[name] = callback; } });
   const settle = () => new Promise(setImmediate);
   globalThis.chrome = {
-    runtime: { onStartup: event('startup') },
+    runtime: {
+      onStartup: event('startup'),
+      onInstalled: event('installed')
+    },
+    history: {
+      onVisited: event('visited'),
+      onVisitRemoved: event('visit-removed'),
+      search(_query, callback) { historySearches += 1; callback([]); }
+    },
     tabs: {
       onUpdated: event('updated'),
       query(_query, callback) { callback(tabs); },
@@ -37,6 +46,10 @@ test('background excludes incognito capture and rename without breaking normal t
   await import('../src/background.js');
   listeners.startup();
   await settle();
+  assert.equal(historySearches, 0);
+  listeners.installed();
+  await settle();
+  assert.equal(historySearches, 0);
   t.mock.timers.tick(100);
   await settle();
   assert.deepEqual(Object.keys(values[CAPTURED_PAGE_TITLES_STORAGE_KEY]), [regular.url]);

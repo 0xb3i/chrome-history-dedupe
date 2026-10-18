@@ -2,12 +2,12 @@
 
 Lightweight Chrome extension for searching history with automatic URL deduplication.
 
-## 1.0.0 正式版
+## 1.0.2 正式版
 
 正式版包含历史搜索与资源去重、弹窗分组与完整页时间线、重命名与置顶、备份恢复和本地后台索引。
 
 - **运行环境：** Chrome 105 及以上；扩展不在无痕模式中运行。直接加载项目目录即可使用，无需构建或安装 Node.js。
-- **从 0.x 升级：** 在原目录更新文件，在 `chrome://extensions` 点击「重新加载」，重新打开搜索弹窗或历史页，确认顶部显示 `v1.0.0`。旧版用户数据沿用现有迁移流程；移动目录或重新安装前按下文导出备份。
+- **升级方式：** 在原目录更新文件，在 `chrome://extensions` 点击「重新加载」，重新打开搜索弹窗或历史页，确认顶部显示 `v1.0.2`。旧版用户数据沿用现有迁移流程；移动目录或重新安装前按下文导出备份。
 - **首次使用：** 后台需要读取 Chrome 历史并建立索引；历史较多时初始化需要时间。之后关键词搜索使用本地索引。
 - **数据边界：** 去重只影响展示，不删除 Chrome 原始历史。重命名页面仍依赖浏览器保留对应历史；备份不包含原始历史。扩展不上传数据，也不提供跨设备同步。
 
@@ -52,7 +52,7 @@ The rename shortcut opens an inline dialog on the active page. Restricted pages 
 
 ## Local Data
 
-The extension requests `activeTab`, `alarms`, `history`, `scripting`, `storage`, `tabs`, and `webNavigation` permissions. It does not upload or sync history. Pinned pages, custom page names, and the last search state are stored locally in `chrome.storage.local`; the rebuildable search index is stored locally in extension IndexedDB. `alarms` performs an hourly background reconciliation so searches never have to wait for it. `webNavigation` distinguishes committed redirects from canceled navigations. The `activeTab` and `scripting` permissions are used only to show the inline rename dialog on the current page.
+The extension requests `activeTab`, `history`, `scripting`, `storage`, `tabs`, and `webNavigation` permissions. It does not upload or sync history. Pinned pages, custom page names, and the last search state are stored locally in `chrome.storage.local`; the rebuildable search index is stored locally in extension IndexedDB. A full history scan runs only when that index is missing or incompatible; normal history changes update it through browser events. `webNavigation` distinguishes committed redirects from canceled navigations. The `activeTab` and `scripting` permissions are used only to show the inline rename dialog on the current page.
 
 ## 备份与恢复
 

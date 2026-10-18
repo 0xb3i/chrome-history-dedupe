@@ -17,7 +17,6 @@ import { waitForInlineRenamePreparation } from './rename-shortcut.js';
 import { createHistoryIndexStore } from './history-index/store.js';
 import { createHistoryIndexService } from './history-index/service.js';
 import {
-  HISTORY_INDEX_ALARM_NAME,
   HISTORY_INDEX_ENSURE_MESSAGE,
   HISTORY_INDEX_UPDATED_MESSAGE
 } from './history-index/protocol.js';
@@ -84,17 +83,11 @@ globalThis.chrome?.storage?.onChanged?.addListener((changes, areaName) => {
 });
 globalThis.chrome?.runtime?.onStartup?.addListener(() => {
   captureOpenTabTitles();
-  void historyIndexService.calibrate().catch(() => {});
+  void historyIndexService.ensureReady().catch(() => {});
 });
 globalThis.chrome?.runtime?.onInstalled?.addListener(() => {
-  scheduleHistoryIndexAlarm();
   captureOpenTabTitles();
-  void historyIndexService.calibrate().catch(() => {});
-});
-globalThis.chrome?.alarms?.onAlarm?.addListener((alarm) => {
-  if (alarm?.name === HISTORY_INDEX_ALARM_NAME) {
-    void historyIndexService.calibrate().catch(() => {});
-  }
+  void historyIndexService.ensureReady().catch(() => {});
 });
 
 globalThis.chrome?.commands?.onCommand?.addListener((command) => {
@@ -106,7 +99,7 @@ globalThis.chrome?.commands?.onCommand?.addListener((command) => {
 
 globalThis.chrome?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
   if (message?.type === HISTORY_INDEX_ENSURE_MESSAGE) {
-    historyIndexService.ensureReady()
+    historyIndexService.ensureReady({ knownUnreadable: Boolean(message.knownUnreadable) })
       .then((state) => sendResponse({ ok: true, state }))
       .catch((error) => sendResponse({ ok: false, error: error.message || '索引初始化失败。' }));
     return true;
@@ -128,8 +121,6 @@ globalThis.chrome?.runtime?.onMessage?.addListener((message, _sender, sendRespon
 
   return false;
 });
-
-scheduleHistoryIndexAlarm();
 
 async function captureOpenTabTitles() {
   try {
@@ -291,20 +282,6 @@ async function restoreInlineRename(message) {
 
 function scheduleDerivedIndexRebuild() {
   void historyIndexService.rebuildDerived().catch(() => {});
-}
-
-function scheduleHistoryIndexAlarm() {
-  if (!globalThis.chrome?.alarms?.get || !globalThis.chrome?.alarms?.create) {
-    return;
-  }
-  globalThis.chrome.alarms.get(HISTORY_INDEX_ALARM_NAME, (alarm) => {
-    void globalThis.chrome.runtime?.lastError;
-    if (alarm) return;
-    globalThis.chrome.alarms.create(HISTORY_INDEX_ALARM_NAME, {
-      delayInMinutes: 1,
-      periodInMinutes: 60
-    });
-  });
 }
 
 function notifyHistoryIndexUpdated(update) {

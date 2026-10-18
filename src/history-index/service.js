@@ -3,7 +3,6 @@ import { loadCapturedPageTitles } from '../storage.js';
 import { buildHistoryIndex, HISTORY_INDEX_ALGORITHM_VERSION } from './derive.js';
 
 const DEFAULT_EVENT_BATCH_MS = 100;
-const DEFAULT_FULL_SYNC_MAX_AGE_MS = 60 * 60 * 1000;
 
 export function createHistoryIndexService(options = {}) {
   const store = options.store;
@@ -12,7 +11,6 @@ export function createHistoryIndexService(options = {}) {
   const now = options.now ?? Date.now;
   const notifyUpdated = options.notifyUpdated ?? (() => {});
   const eventBatchMs = Number(options.eventBatchMs ?? DEFAULT_EVENT_BATCH_MS);
-  const fullSyncMaxAgeMs = Number(options.fullSyncMaxAgeMs ?? DEFAULT_FULL_SYNC_MAX_AGE_MS);
   let operationQueue = Promise.resolve();
   let calibrationPromise = null;
   let flushLoopPromise = null;
@@ -147,12 +145,11 @@ export function createHistoryIndexService(options = {}) {
   });
 
   return {
-    async ensureReady() {
+    async ensureReady(options = {}) {
       const state = await store.getState();
       const isReady = Boolean(state.activeGeneration) &&
         state.algorithmVersion === HISTORY_INDEX_ALGORITHM_VERSION;
-      if (!isReady) return calibrate();
-      if (now() - state.lastFullSyncAt > fullSyncMaxAgeMs) void calibrate().catch(() => {});
+      if (!isReady || options.knownUnreadable) return calibrate();
       if (state.indexedRawRevision !== state.rawRevision) {
         pendingDerivedRebuild = true;
         void scheduleFlush().catch(() => {});

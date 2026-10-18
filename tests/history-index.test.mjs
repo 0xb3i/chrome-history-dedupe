@@ -84,6 +84,60 @@ test('ready persistent index never queries Chrome history', async () => {
   assert.equal((await store.loadRange('all')).pageItems.length, 1);
 });
 
+test('stale persistent index stays ready without foreground calibration', async () => {
+  const store = createMemoryIndexStore([historyItem('https://example.com/stale', NOW)]);
+  await seedReadyIndex(store);
+  let searchCalls = 0;
+  const service = createService(store, {
+    searchHistory: async () => {
+      searchCalls += 1;
+      return [];
+    },
+    now: () => NOW + 2 * 60 * 60 * 1000
+  });
+
+  await service.ensureReady();
+  await Promise.resolve();
+
+  assert.equal(searchCalls, 0);
+  assert.equal((await store.loadRange('all')).pageItems.length, 1);
+});
+
+test('missing persistent index still calibrates before becoming ready', async () => {
+  const item = historyItem('https://example.com/first-index', NOW);
+  const store = createMemoryIndexStore();
+  let searchCalls = 0;
+  const service = createService(store, {
+    searchHistory: async () => {
+      searchCalls += 1;
+      return [item];
+    }
+  });
+
+  await service.ensureReady();
+
+  assert.equal(searchCalls, 1);
+  assert.deepEqual((await store.loadRange('all')).pageItems.map((entry) => entry.url), [item.url]);
+});
+
+test('known unreadable persistent index triggers repair calibration', async () => {
+  const repaired = historyItem('https://example.com/repaired', NOW);
+  const store = createMemoryIndexStore([historyItem('https://example.com/stale-chunks', NOW)]);
+  await seedReadyIndex(store);
+  let searchCalls = 0;
+  const service = createService(store, {
+    searchHistory: async () => {
+      searchCalls += 1;
+      return [repaired];
+    }
+  });
+
+  await service.ensureReady({ knownUnreadable: true });
+
+  assert.equal(searchCalls, 1);
+  assert.deepEqual((await store.loadRange('all')).pageItems.map((entry) => entry.url), [repaired.url]);
+});
+
 test('visited events replace raw URLs and rebuild without calling History API', async () => {
   const store = createMemoryIndexStore();
   let searchCalls = 0;

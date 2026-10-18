@@ -84,7 +84,9 @@ const expandedTitleGroups = new Map();
 const searchState = createSearchState({
   loadIndex: () => historyIndexStore.loadRange('all'),
   ensureIndex: async () => {
-    const response = await requestHistoryIndex(HISTORY_INDEX_ENSURE_MESSAGE);
+    const response = await requestHistoryIndex(HISTORY_INDEX_ENSURE_MESSAGE, {
+      knownUnreadable: true
+    });
     if (!response?.ok) throw new Error(response?.error || '历史索引尚未就绪。');
   },
   onChange(snapshot) {
@@ -1154,13 +1156,13 @@ function addHistoryIndexUpdateListener() {
   });
 }
 
-function requestHistoryIndex(type) {
+function requestHistoryIndex(type, details = {}) {
   return new Promise((resolve, reject) => {
     if (!globalThis.chrome?.runtime?.sendMessage) {
       reject(new Error('扩展后台不可用。'));
       return;
     }
-    globalThis.chrome.runtime.sendMessage({ type }, (response) => {
+    globalThis.chrome.runtime.sendMessage({ type, ...details }, (response) => {
       const lastError = globalThis.chrome.runtime?.lastError;
       if (lastError) {
         reject(new Error(lastError.message));

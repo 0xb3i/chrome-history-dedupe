@@ -37,7 +37,7 @@ test('rename command opens a service-worker handled shortcut', () => {
   assert.equal(manifest.permissions.includes('storage'), true);
   assert.equal(manifest.permissions.includes('tabs'), true);
   assert.equal(manifest.permissions.includes('activeTab'), true);
-  assert.equal(manifest.permissions.includes('alarms'), true);
+  assert.equal(manifest.permissions.includes('alarms'), false);
   assert.equal(manifest.permissions.includes('scripting'), true);
   assert.deepEqual(manifest.commands['rename-current-page'].suggested_key, {
     default: 'Alt+Shift+S',
