@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createHighlightedExcerpt, describeLinkChoices, groupItemsByDisplayTitle } from '../src/result-presentation.js';
+import { createHighlightedExcerpt, describeLinkChoices, formatRelativeVisitTime, groupItemsByDisplayTitle } from '../src/result-presentation.js';
+
+test('relative visit times use local calendar days and retain dates beyond a week', () => {
+  const now = new Date(2026, 9, 18, 12).getTime();
+  assert.equal(formatRelativeVisitTime(new Date(2026, 9, 18, 9, 18).getTime(), now), '09:18');
+  assert.equal(formatRelativeVisitTime(new Date(2026, 9, 17, 23).getTime(), now), '昨天');
+  assert.equal(formatRelativeVisitTime(new Date(2026, 9, 16, 12).getTime(), now), '周五');
+  assert.equal(formatRelativeVisitTime(new Date(2026, 9, 11, 12).getTime(), now), '10/11');
+  assert.equal(formatRelativeVisitTime(new Date(2025, 9, 18, 12).getTime(), now), '2025/10/18');
+  assert.equal(formatRelativeVisitTime(0, now), '未知时间');
+});
 
 test('long highlighted titles use a bounded excerpt near the first match and preserve input ranges', () => {
   for (const prefix of ['', '说明'.repeat(300)]) {
@@ -98,211 +108,71 @@ test('renaming or pinning a member removes only that member from the collapsed b
   assert.deepEqual(rows[1].items, [b, c]);
 });
 
-test('known merge request tabs explain the destination within the same request', () => {
-  for (const host of ['code.byted.org', 'gitlab.com']) {
-    const urls = ['', '/diffs', '/commits'].map((suffix) =>
-      item('', { url: `https://${host}/team/repo/merge_requests/335${suffix}` }));
-    assert.deepEqual(describeLinkChoices(urls), [
-      { label: '概览', secondary: '' },
-      { label: '文件变更', secondary: '' },
-      { label: '提交记录', secondary: '' }
-    ]);
-  }
-});
-
-test('different merge request IDs retain the identifying route', () => {
-  const urls = ['335/diffs', '336/diffs'].map((suffix) =>
-    item('', { url: `https://code.byted.org/team/repo/merge_requests/${suffix}` }));
-  assert.deepEqual(describeLinkChoices(urls), [
-    { label: '335/diffs', secondary: '' },
-    { label: '336/diffs', secondary: '' }
-  ]);
-});
-
-test('unknown sites and unknown tab routes never receive invented page names', () => {
-  assert.deepEqual(describeLinkChoices([
-    item('team/repo/merge_requests/335/diffs'), item('team/repo/merge_requests/335/commits')
-  ]), [{ label: 'diffs', secondary: '' }, { label: 'commits', secondary: '' }]);
-  const urls = ['diffs', 'pipeline/details'].map((suffix) =>
-    item('', { url: `https://code.byted.org/team/repo/merge_requests/335/${suffix}` }));
-  assert.deepEqual(describeLinkChoices(urls), [
-    { label: '文件变更', secondary: '' }, { label: 'pipeline/details', secondary: '' }
-  ]);
-});
-
-test('relative paths remove shared directories without cutting different IDs or adding query noise', () => {
-  const prefix = 'long/shared/model-access/';
-  assert.deepEqual(describeLinkChoices([
-    item(`${prefix}GEC-335/details?scene_keyword=model&token=first`),
-    item(`${prefix}GEC-336/details?scene_keyword=other&token=second`)
-  ]), [
-    { label: 'GEC-335/details', secondary: '' },
-    { label: 'GEC-336/details', secondary: '' }
-  ]);
-});
-
-test('parent pages and root pages remain visible beside their children', () => {
-  for (const prefix of ['', 'models']) {
-    const choices = describeLinkChoices([item(prefix), item(`${prefix ? `${prefix}/` : ''}details`)]);
-    assert.equal(choices[0].label, '页面入口');
-    assert.deepEqual(choices[1], { label: 'details', secondary: '' });
-  }
-});
-
-test('long identifying segments remain complete rather than being independently abbreviated', () => {
-  const identifier = 'a'.repeat(200);
-  assert.deepEqual(describeLinkChoices([
-    item(`models/${identifier}/details`), item('models/other/details')
-  ]), [
-    { label: `${identifier}/details`, secondary: '' },
-    { label: 'other/details', secondary: '' }
-  ]);
-});
-
-test('same-path choices show the useful query field and omit repeated or redundant state', () => {
-  assert.deepEqual(describeLinkChoices([
-    item('view?tab=overview&scene_keyword=model&timestamp=100'),
-    item('view?tab=files&scene_keyword=model&timestamp=200')
-  ]), [{ label: 'tab：overview', secondary: '' }, { label: 'tab：files', secondary: '' }]);
-});
-
-test('only colliding route labels need additional query information', () => {
-  assert.deepEqual(describeLinkChoices([
-    item('models?id=1'), item('models?id=2'), item('dashboard?id=3')
-  ]), [
-    { label: 'models', secondary: 'id：1' },
-    { label: 'models', secondary: 'id：2' },
-    { label: 'dashboard', secondary: '' }
-  ]);
-});
-
-test('query descriptions distinguish missing values, empty values and repeated keys', () => {
-  assert.deepEqual(describeLinkChoices([
-    item('view'), item('view?filter='), item('view?filter=a&filter=b'), item('view?filter=a')
-  ]), [
-    { label: 'filter：未指定', secondary: '' },
-    { label: 'filter：（空值）', secondary: '' },
-    { label: 'filter：["a","b"]', secondary: '' },
-    { label: 'filter：a', secondary: '' }
-  ]);
-});
-
-test('multiple independent query fields are retained when both are necessary to choose', () => {
+test('simplified URLs retain paths, every query parameter and fragments', () => {
   const choices = describeLinkChoices([
-    item('view?tab=files&id=1'), item('view?tab=files&id=2'), item('view?tab=commits&id=1')
+    item('explore?channel_id=homefeed_recommend'), item('explore'),
+    item('user/profile/123'), item('explore?app_platform=ios&channel_id='),
+    item('app#/models?tab=usage')
   ]);
-  assert.equal(new Set(choices.map((choice) => JSON.stringify(choice))).size, 3);
-  assert.match(choices[0].label, /tab：files/);
-  assert.match(choices[0].label, /id：1/);
-  assert.match(choices[1].label, /id：2/);
-  assert.match(choices[2].label, /tab：commits/);
-  choices.forEach((choice) => assert.equal(choice.secondary, ''));
-});
-
-test('hash routes retain their destination and hash queries can distinguish equal routes', () => {
-  assert.deepEqual(describeLinkChoices([
-    item('app?lang=zh#/models'), item('app?lang=zh#/usage')
-  ]), [{ label: '#/models', secondary: '' }, { label: '#/usage', secondary: '' }]);
-  assert.deepEqual(describeLinkChoices([
-    item('app#/models?tab=details'), item('app#/models?tab=usage')
-  ]), [
-    { label: '片段参数 tab：details', secondary: '' },
-    { label: '片段参数 tab：usage', secondary: '' }
+  assert.deepEqual(choices.map((choice) => choice.label + choice.secondary), [
+    '/explore?channel_id=homefeed_recommend', '/explore', '/user/profile/123',
+    '/explore?app_platform=ios&channel_id=', '/app#/models?tab=usage'
   ]);
 });
 
-test('hash routes drop common directories and do not add noise to already distinct paths', () => {
-  assert.deepEqual(describeLinkChoices([
-    item('app#/long/shared/models'), item('app#/long/shared/usage')
-  ]), [{ label: '#/models', secondary: '' }, { label: '#/usage', secondary: '' }]);
-  assert.deepEqual(describeLinkChoices([
-    item('models#notes'), item('dashboard#summary')
-  ]), [{ label: 'models', secondary: '' }, { label: 'dashboard', secondary: '' }]);
+test('simplified URLs preserve parameter order, repeated values and encoded delimiters', () => {
+  assert.deepEqual(describeLinkChoices([item('a%2Fb?filter=a&filter=b&empty=#notes')]),
+    [{ label: '/a%2Fb', secondary: '?filter=a&filter=b&empty=#notes' }]);
 });
 
-test('Chinese paths are readable while encoded route delimiters and malformed encodings remain intact', () => {
-  assert.deepEqual(describeLinkChoices([
-    item('app/%E6%A8%A1%E5%9E%8B'), item('app/a%2Fb%3Fc%23d'), item('app/%broken')
-  ]), [
-    { label: '模型', secondary: '' },
-    { label: 'a%2Fb%3Fc%23d', secondary: '' },
-    { label: '%broken', secondary: '' }
-  ]);
-  assert.deepEqual(describeLinkChoices([
-    item('app#/%E8%AF%A6%E6%83%85'), item('app#/%broken')
-  ]), [{ label: '#/详情', secondary: '' }, { label: '#/%broken', secondary: '' }]);
+test('different origins remain visible and credentials are hidden but distinguishable', () => {
+  const items = [{ url: 'https://alice:one@example.com/a?token=one' },
+    { url: 'http://bob:two@example.com/a?token=two' }];
+  const choices = describeLinkChoices(items);
+  assert.match(choices[0].label, /^https:\/\/example.com/);
+  assert.match(choices[1].label, /^http:\/\/example.com/);
+  assert.doesNotMatch(JSON.stringify(choices), /alice|bob|one|two/);
+  assert.equal(new Set(choices.map((choice) => choice.label + choice.secondary)).size, 2);
 });
 
-test('protocol and port differences remain distinguishable within a hostname bucket', () => {
-  const urls = ['https://gpt.example.com/view', 'http://gpt.example.com/view',
-    'https://gpt.example.com:8443/view'].map((url) => item('', { url }));
-  const choices = describeLinkChoices(urls);
-  assert.equal(new Set(choices.map((choice) => JSON.stringify(choice))).size, urls.length);
-  assert.match(choices[0].label, /https/);
-  assert.match(choices[1].label, /http/);
-  assert.match(choices[2].label, /8443/);
+test('query and hash credentials are redacted without hiding ordinary parameters', () => {
+  const choices = describeLinkChoices([item('app?%74oken=secret&lang=zh#/view?api_key=private&tab=files')]);
+  assert.doesNotMatch(choices[0].secondary, /secret|private/);
+  assert.match(choices[0].secondary, /lang=zh/);
+  assert.match(choices[0].secondary, /tab=files/);
 });
 
-test('credential-only differences are identified without showing credential values', () => {
-  for (const urls of [
-    [item('view?token=secret-one'), item('view?token=secret-two')],
-    [item('app#/?api_key=secret-one'), item('app#/?api_key=secret-two')],
-    [item('', { url: 'https://alice:secret-one@gpt.example.com/view' }),
-      item('', { url: 'https://bob:secret-two@gpt.example.com/view' })]
-  ]) {
-    const choices = describeLinkChoices(urls);
-    assert.equal(new Set(choices.map((choice) => JSON.stringify(choice))).size, 2);
-    assert.doesNotMatch(JSON.stringify(choices), /secret-one|secret-two|alice|bob/);
-    assert.match(JSON.stringify(choices), /已隐藏/);
-  }
-});
-
-test('large credential groups keep stable hidden labels with bounded serialization work', (t) => {
-  const size = 1000;
-  const items = Array.from({ length: size }, (_, index) =>
-    item(`view?token=secret-${String(index).padStart(5, '0')}`));
-  const stringify = JSON.stringify;
-  let credentialSerializations = 0;
-  t.mock.method(JSON, 'stringify', (value, ...args) => {
-    if (Array.isArray(value) && String(value[0]).startsWith('secret-')) credentialSerializations += 1;
-    return stringify(value, ...args);
-  });
-  const choices = describeLinkChoices([...items].reverse());
-  assert.ok(credentialSerializations < size * 10,
-    `credential serialization should scale linearly, received ${credentialSerializations}`);
-  assert.equal(choices.length, size);
-  choices.forEach((choice, index) => assert.deepEqual(choice, {
-    label: `token：已隐藏 ${size - index}`, secondary: ''
-  }));
-  const repeated = describeLinkChoices([items[1], item('view'), items[0], items[1]]);
-  assert.deepEqual(repeated.map((choice) => choice.label), [
-    'token：已隐藏 2', 'token：未指定', 'token：已隐藏 1', 'token：已隐藏 2'
-  ]);
-});
-
-test('decoded path collisions and equivalent query spellings remain distinguishable without invented destinations', () => {
-  const paths = describeLinkChoices([item('app/a'), item('app/%61')]);
-  assert.deepEqual(paths, [
-    { label: 'a', secondary: '路径：/app/a' },
-    { label: 'a', secondary: '路径：/app/%61' }
-  ]);
-  const ordered = describeLinkChoices([item('view?a=1&b=2'), item('view?b=2&a=1')]);
-  assert.equal(new Set(ordered.map((choice) => JSON.stringify(choice))).size, 2);
-  ordered.forEach((choice) => assert.match(choice.label, /^地址写法 \d+$/));
-});
-
-test('describing choices preserves frozen inputs, URLs and their existing order', () => {
+test('simplifying URLs preserves frozen inputs and order', () => {
   const items = Object.freeze([item('models/z?id=last'), item('models/a?id=first')]);
   const before = JSON.stringify(items);
-  assert.deepEqual(describeLinkChoices(items), [
-    { label: 'z', secondary: '' }, { label: 'a', secondary: '' }
-  ]);
+  assert.deepEqual(describeLinkChoices(items).map((choice) => choice.label + choice.secondary),
+    ['/models/z?id=last', '/models/a?id=first']);
   assert.equal(JSON.stringify(items), before);
   assert.deepEqual(describeLinkChoices([]), []);
 });
 
-test('invalid and absent addresses remain displayable without throwing', () => {
-  const addresses = ['bad address?original=true', '/relative/path', '', 42, null, undefined];
+test('invalid addresses remain displayable', () => {
+  const addresses = ['bad address', '/relative/path', '', 42, null, undefined];
   assert.deepEqual(describeLinkChoices(addresses.map((url) => ({ url }))),
     addresses.map((url) => ({ label: String(url ?? ''), secondary: '' })));
+});
+
+
+test('expanded choices use recorded page titles and retain the simplified address below', () => {
+  const choices = describeLinkChoices([
+    { url: 'https://example.com/wiki/123?view=edit', title: 'Docs', historyTitle: '接口设计文档' },
+    { url: 'https://example.com/wiki/456', title: 'Docs', originalTitle: '部署指南' },
+    { url: 'https://example.com/wiki/789', title: 'Docs' }
+  ], { groupTitle: 'Docs' });
+  assert.deepEqual(choices, [
+    { label: '接口设计文档', secondary: '/wiki/123?view=edit', isPageTitle: true },
+    { label: '部署指南', secondary: '/wiki/456', isPageTitle: true },
+    { label: '/wiki/789', secondary: '' }
+  ]);
+});
+
+test('expanded choices never promote URLs or unrelated search aliases to titles', () => {
+  assert.deepEqual(describeLinkChoices([{ url: 'https://example.com/wiki/123', title: 'Docs',
+    historyTitle: 'https://example.com/wiki/123', searchableTitles: ['不确定的旧标题'] }], { groupTitle: 'Docs' }),
+    [{ label: '/wiki/123', secondary: '' }]);
 });

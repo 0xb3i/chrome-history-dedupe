@@ -9,8 +9,15 @@ import {
 const form = document.querySelector('#rename-form');
 const titleInput = document.querySelector('#rename-title');
 const statusLabel = document.querySelector('#rename-status');
+const urlLabel = document.querySelector('#rename-url');
 const cancelButton = document.querySelector('#cancel-button');
 const restoreButton = document.querySelector('#restore-button');
+
+globalThis.chrome?.storage?.local?.get?.('history-ui-color', (saved) => {
+  if (['blue', 'orange', 'green', 'neutral'].includes(saved?.['history-ui-color'])) {
+    document.documentElement.dataset.themeColor = saved['history-ui-color'];
+  }
+});
 
 let currentDraft = null;
 let canRestoreOriginalTitle = false;
@@ -26,6 +33,11 @@ cancelButton.addEventListener('click', () => {
 
 restoreButton.addEventListener('click', () => {
   restoreOriginalTitle();
+});
+
+titleInput.addEventListener('input', () => setPending(false));
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !titleInput.disabled) closeWindow();
 });
 
 init();
@@ -47,8 +59,11 @@ async function init() {
     }
 
     titleInput.value = currentDraft.currentTitle;
+    urlLabel.textContent = currentDraft.url;
+    urlLabel.title = currentDraft.url;
     canRestoreOriginalTitle = await hasTitleOverride(currentDraft.titleOverrideKey);
-    restoreButton.disabled = !canRestoreOriginalTitle;
+    restoreButton.hidden = !canRestoreOriginalTitle;
+    setPending(false);
     titleInput.select();
   } catch (error) {
     renderError(error.message || '读取网页信息失败。');
@@ -120,7 +135,10 @@ function setPending(isPending) {
   titleInput.disabled = isPending;
   restoreButton.disabled = isPending || !canRestoreOriginalTitle;
   cancelButton.disabled = isPending;
-  form.querySelector('button[type="submit"]').disabled = isPending;
+  form.querySelector('button[type="submit"]').disabled = isPending || !currentDraft ||
+    !titleInput.value.trim() || titleInput.value.trim().replace(/\s+/g, ' ') ===
+    String(currentDraft.currentTitle ?? '').trim().replace(/\s+/g, ' ');
+  form.querySelector('button[type="submit"]').textContent = isPending ? '处理中…' : '保存';
 
   if (isPending) {
     setError('');

@@ -36,10 +36,11 @@ import {
 import { createSearchState } from './search-state.js';
 import { createRenameSession } from './rename-session.js';
 import { createHistoryPageInitializer } from './history-page-init.js';
-import { createHighlightedExcerpt, describeLinkChoices, groupItemsByDisplayTitle } from './result-presentation.js';
+import { createHighlightedExcerpt, describeLinkChoices, formatRelativeVisitTime, groupItemsByDisplayTitle } from './result-presentation.js';
 import { createLiveSearch } from './live-search.js';
 import { createSelectControl } from './select-control.js';
 import { initializeUserDataControls } from './user-data-controls.js';
+import { createResultNavigation } from './result-navigation.js';
 
 const SNAPSHOT_RENDER_DEBOUNCE_MS = 50;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -58,7 +59,7 @@ const appVersion = document.querySelector('#app-version');
 const isPopup = document.body.classList.contains('popup-body');
 const searchView = isPopup ? 'popup' : 'history';
 const RESULT_PAGE_SIZE = isPopup ? 30 : 50;
-const TITLE_GROUP_PAGE_SIZE = 30;
+const TITLE_GROUP_PAGE_SIZE = 8;
 let resultLimit = RESULT_PAGE_SIZE;
 let renderedConditions = '';
 let searchPending = false;
@@ -66,7 +67,17 @@ const renameSession = createRenameSession();
 const groupRenameSession = createRenameSession();
 const renameDialog = createRenameDialog();
 const groupRenameDialog = createGroupRenameDialog();
+const resultNavigation = createResultNavigation({
+  queryInput, results,
+  scrollContainer: document.querySelector('.popup-result-scroll') || document.scrollingElement || document.documentElement,
+  isBlocked: () => Boolean(document.querySelector('dialog[open], .select-combobox-button[aria-expanded="true"]'))
+});
 let currentGroups = [];
+let sourceFilter = null;
+const sourceFilterBar = document.createElement('div');
+sourceFilterBar.className = 'source-filter-bar';
+sourceFilterBar.hidden = true;
+summary.before(sourceFilterBar);
 let rangeDropdown = null;
 let sortDropdown = null;
 let pinnedUrlKeys = new Set();
@@ -74,7 +85,6 @@ let groupNameOverrides = new Map();
 let titleOverrides = new Map();
 let isInitialized = false;
 let showRenamedOnly = false;
-let showMinimalMode = false;
 let sortOrder = isPopup ? 'default' : 'recent';
 const editedDisplayPreferences = new Set();
 let pendingSearchPreferences = null;
@@ -108,7 +118,6 @@ const pageInitializer = createHistoryPageInitializer({
     groupNameOverrides = preferences.groupNames;
     titleOverrides = preferences.titles;
     if (!editedDisplayPreferences.has('renamed')) showRenamedOnly = Boolean(preferences.lastSearchState?.showRenamedOnly);
-    if (!editedDisplayPreferences.has('minimal')) showMinimalMode = Boolean(preferences.lastSearchState?.showMinimalMode);
     if (!editedDisplayPreferences.has('sort')) {
       const savedSort = normalizeSortOrder(preferences.lastSearchState?.sortOrder);
       sortOrder = !isPopup && savedSort === 'default' ? 'recent' : savedSort;
@@ -116,7 +125,6 @@ const pageInitializer = createHistoryPageInitializer({
     document.querySelector('#sort-order').value = sortOrder;
     sortDropdown.sync();
     renamedOnlyCheckbox.checked = showRenamedOnly;
-    syncMinimalModePresentation();
     if (!isInitialized) {
       addStorageChangeListener();
       addHistoryIndexUpdateListener();
@@ -148,19 +156,6 @@ const liveSearch = createLiveSearch({
   }
 });
 
-results.addEventListener('toggle', () => updateCollapseControl(), true);
-for (const type of ['click', 'focusin']) document.addEventListener(type, (event) => {
-  const menu = summary.querySelector('.view-menu');
-  if (menu && !menu.contains(event.target)) menu.open = false;
-});
-document.addEventListener('keydown', (event) => {
-  const menu = summary.querySelector('.view-menu[open]');
-  if (event.key === 'Escape' && menu) {
-    menu.open = false;
-    menu.querySelector('summary').focus();
-  }
-});
-
 const historyDayFormatter = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'full' });
 const historyTimeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const currentYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
@@ -178,7 +173,35 @@ queryInput.addEventListener('compositionstart', () => liveSearch.compositionStar
 queryInput.addEventListener('compositionend', () => liveSearch.compositionEnd());
 rangeSelect.addEventListener('change', () => liveSearch.change());
 rangeDropdown = createSelectControl(rangeSelect, { label: '时间筛选' });
-document.querySelector('#result-controls').append(createSortControl(), createViewMenu());
+const themeSelect = document.querySelector('#theme-color');
+if (themeSelect) {
+  const colors = ['blue', 'orange', 'green', 'neutral'];
+  try {
+    const saved = globalThis.localStorage?.getItem('history-ui-color');
+    if (colors.includes(saved)) themeSelect.value = saved;
+  } catch { /* Theme switching remains available when persistence is unavailable. */ }
+  document.documentElement.dataset.themeColor = themeSelect.value;
+  const themeControl = createSelectControl(themeSelect, { label: '主题' });
+  let themeEdited = false;
+  globalThis.chrome?.storage?.local?.get?.('history-ui-color', (saved) => {
+    if (themeEdited) return;
+    if (colors.includes(saved?.['history-ui-color'])) {
+      themeSelect.value = saved['history-ui-color'];
+      document.documentElement.dataset.themeColor = themeSelect.value;
+      themeControl.sync();
+    } else {
+      globalThis.chrome?.storage?.local?.set?.({ 'history-ui-color': themeSelect.value });
+    }
+  });
+  themeSelect.addEventListener('change', () => {
+    themeEdited = true;
+    document.documentElement.dataset.themeColor = themeSelect.value;
+    globalThis.chrome?.storage?.local?.set?.({ 'history-ui-color': themeSelect.value });
+    try { globalThis.localStorage?.setItem('history-ui-color', themeSelect.value); } catch { /* Keep the selected theme for this page. */ }
+  });
+}
+
+document.querySelector('#result-controls').append(createSortControl());
 renamedOnlyCheckbox.addEventListener('change', () => {
   showRenamedOnly = renamedOnlyCheckbox.checked;
   editedDisplayPreferences.add('renamed');
@@ -211,7 +234,7 @@ function renderRuntimeVersion() {
 
 async function init() {
   try {
-    setLoading();
+    setLoading('正在准备历史搜索…');
     await pageInitializer.initialize();
     if (!searchState.snapshot) await liveSearch.submit();
 
@@ -240,8 +263,10 @@ function renderHistorySnapshot() {
   if (!searchSnapshot) return;
   const { query, matchedItems } = searchSnapshot;
   const visibleItems = showRenamedOnly ? matchedItems.filter((item) => item.isTitleRenamed) : matchedItems;
-  currentGroups = groupHistoryItems(visibleItems, sortOrder);
-  const conditions = JSON.stringify([query, searchSnapshot.range, showRenamedOnly, sortOrder]);
+  const groups = groupHistoryItems(visibleItems, sortOrder);
+  currentGroups = sourceFilter ? groups.filter((group) => group.key === sourceFilter) : groups;
+  renderSourceFilter();
+  const conditions = JSON.stringify([query, searchSnapshot.range, showRenamedOnly, sortOrder, sourceFilter]);
   if (conditions !== renderedConditions) resultLimit = RESULT_PAGE_SIZE;
   renderedConditions = conditions;
   searchPending = queryInput.value.trim() !== query || rangeSelect.value !== searchSnapshot.range;
@@ -295,7 +320,6 @@ async function rememberCurrentSearchState(state = searchSnapshot) {
       query: state?.query ?? queryInput.value,
       range: state?.range ?? rangeSelect.value,
       showRenamedOnly,
-      showMinimalMode,
       sortOrder
     }, searchView);
   } catch {
@@ -308,15 +332,14 @@ function renderSummary() {
   const total = currentGroups.reduce((total, group) => total + group.itemCount, 0);
   count.textContent = `${total.toLocaleString('zh-CN')} 条结果`;
   renamedOnlyCheckbox.checked = showRenamedOnly;
-  syncMinimalModePresentation();
-  updateCollapseControl();
 }
 
 function renderResults(groups) {
+  const navigationState = resultNavigation.capture();
   results.replaceChildren();
   if (groups.length === 0) {
-    updateCollapseControl();
     renderEmptyState();
+    resultNavigation.restore(navigationState);
     return;
   }
 
@@ -368,7 +391,7 @@ function renderResults(groups) {
     fragment.append(more);
   }
   results.append(fragment);
-  updateCollapseControl();
+  resultNavigation.restore(navigationState);
 }
 
 function createTitleGroupItem(entry, groupKey) {
@@ -381,6 +404,7 @@ function createTitleGroupItem(entry, groupKey) {
   details.open = expandedTitleGroups.has(entry.key);
   details.addEventListener('toggle', () => {
     if (!details.isConnected) return;
+    header.setAttribute('aria-expanded', String(details.open));
     if (details.open) {
       populateLinks();
       expandedTitleGroups.set(entry.key, renderedCount);
@@ -388,6 +412,9 @@ function createTitleGroupItem(entry, groupKey) {
   });
   const header = document.createElement('summary');
   header.className = 'result-item title-group-summary';
+  header.dataset.navigationKey = representative.dedupeKey || representative.url;
+  header.setAttribute('aria-label', `${entry.title}，展开或收起 ${entry.items.length} 个同名链接`);
+  header.setAttribute('aria-expanded', String(details.open));
   const content = document.createElement('div');
   content.className = 'result-content';
   const title = document.createElement('a');
@@ -398,13 +425,23 @@ function createTitleGroupItem(entry, groupKey) {
   title.rel = 'noreferrer';
   title.title = `${entry.title}\n打开访问最多的链接：${representative.url}`;
   title.addEventListener('click', (event) => event.stopPropagation());
-  content.append(title, createResultMeta(entry, { aggregate: true, groupKey }));
+  content.append(title, createResultMeta(entry, { groupKey }));
   appendMatchReason(content, entry.items[0]);
   const count = document.createElement('span');
   count.className = 'title-group-count';
   count.textContent = `${entry.items.length} 个链接`;
   count.title = '展开或收起其他链接';
-  header.append(content, count);
+  const controls = document.createElement('div');
+  controls.className = 'title-group-tools';
+  const actions = document.createElement('div');
+  actions.className = 'result-actions';
+  actions.append(createRenameButton(representative), createPinButton(representative));
+  actions.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+  });
+  controls.append(actions, count);
+  header.append(content, controls);
   const list = document.createElement('ol');
   list.className = 'title-group-list';
   let items;
@@ -422,18 +459,20 @@ function createTitleGroupItem(entry, groupKey) {
   function populateLinks(limit = expandedTitleGroups.get(entry.key) || TITLE_GROUP_PAGE_SIZE) {
     items ??= [...entry.items].sort(sortOrder === 'default'
       ? compareHistoryItemsByVisits : getHistoryItemComparator(sortOrder));
-    choices ??= describeLinkChoices(items);
+    choices ??= describeLinkChoices(items, { groupTitle: entry.title });
     more.remove();
     const fragment = document.createDocumentFragment();
     const end = Math.min(limit, items.length);
     for (; renderedCount < end; renderedCount += 1) {
-      fragment.append(createResultItem(items[renderedCount], groupKey, { choice: choices[renderedCount] }));
+      const index = renderedCount;
+      fragment.append(createResultItem(items[index], groupKey, { choice: choices[index] }));
     }
     list.append(fragment);
     if (renderedCount < items.length) {
       moreButton.textContent = `显示更多链接（剩余 ${items.length - renderedCount} 个）`;
       list.append(more);
     }
+
   }
   moreButton.addEventListener('click', () => {
     const oldCount = renderedCount;
@@ -441,8 +480,8 @@ function createTitleGroupItem(entry, groupKey) {
     expandedTitleGroups.set(entry.key, renderedCount);
     list.children[oldCount]?.querySelector('a')?.focus();
   });
-  if (details.open) populateLinks();
   details.append(header, list);
+  if (details.open) populateLinks();
   row.append(details);
   return row;
 }
@@ -465,6 +504,7 @@ function createResultItem(item, groupKey, { distinguishUrl = false, choice = nul
   const variant = Boolean(choice);
   const row = document.createElement('li');
   row.className = variant ? 'result-item result-variant' : 'result-item';
+  row.dataset.navigationKey = item.dedupeKey || item.url;
   if (!isPopup) {
     row.classList.add('history-result');
     const time = document.createElement('time');
@@ -490,7 +530,7 @@ function createResultItem(item, groupKey, { distinguishUrl = false, choice = nul
   actions.className = 'result-actions';
 
   const title = document.createElement('a');
-  title.className = variant ? 'result-title result-variant-link' : 'result-title';
+  title.className = variant ? `result-title result-variant-link${choice.isPageTitle ? ' has-page-title' : ''}` : 'result-title';
   title.href = item.url;
   title.target = '_blank';
   title.rel = 'noreferrer';
@@ -506,16 +546,25 @@ function createResultItem(item, groupKey, { distinguishUrl = false, choice = nul
       context.textContent = choice.secondary;
       title.append(context);
     }
-    title.title += `\n最近访问：${formatVisitTime(item.lastVisitTime)}\n${item.totalVisitCount ?? item.visitCount ?? 0} 次访问`;
-    title.setAttribute('aria-label', `${choice.label}${choice.secondary ? `，${choice.secondary}` : ''}，打开链接：${item.url}`);
+    title.setAttribute('aria-label', `${choice.label}${choice.secondary}，打开链接：${item.url}`);
   } else {
     appendHighlightedText(title, item.title || item.url || '(无标题)', item.searchMatch?.titleRanges);
     if (item.title && item.title !== item.url) title.title = `${item.title}\n${item.url || ''}`;
   }
 
+  if (item.isPinned) {
+    const states = document.createElement('span');
+    states.className = 'result-state-icons';
+    states.append(createResultStateIcon('已固定', createPinIcon()));
+    titleRow.append(states);
+  }
   titleRow.append(title);
   if (item.isTitleRenamed) {
-    titleRow.append(createRenamedTag());
+    const label = document.createElement('span');
+    label.className = 'result-custom-label';
+    label.textContent = isPopup ? '已命名' : '自定义';
+    label.title = '当前显示的是自定义网页名';
+    titleRow.append(label);
   }
   actions.append(createRenameButton(item), createPinButton(item));
 
@@ -533,11 +582,14 @@ function createResultItem(item, groupKey, { distinguishUrl = false, choice = nul
   }
   row.append(content);
   if (variant) {
+    const stats = document.createElement('div');
+    stats.className = 'result-variant-stats';
     const visits = document.createElement('span');
     visits.className = 'result-variant-visits';
     visits.textContent = `${item.totalVisitCount ?? item.visitCount ?? 0} 次访问`;
     visits.title = '累计访问次数';
-    row.append(visits);
+    stats.append(visits);
+    row.append(stats);
   }
   row.append(actions);
   return row;
@@ -570,7 +622,38 @@ function appendMatchReason(content, item) {
   content.append(reason);
 }
 
-function createResultHost(groupKey) {
+function renderSourceFilter() {
+  sourceFilterBar.replaceChildren();
+  sourceFilterBar.hidden = !sourceFilter;
+  if (!sourceFilter) return;
+  const label = groupNameOverrides.get(sourceFilter) || sourceFilter;
+  const caption = document.createElement('span');
+  caption.className = 'source-filter-caption';
+  caption.textContent = '来源：';
+  const name = document.createElement('span');
+  name.className = 'source-filter-name';
+  name.textContent = label;
+  name.title = label;
+  const clear = document.createElement('button');
+  clear.type = 'button';
+  clear.className = 'source-filter-clear';
+  const icon = createBaseIcon();
+  const path = document.createElementNS(SVG_NAMESPACE, 'path');
+  path.setAttribute('d', 'M6 6l12 12M18 6L6 18');
+  icon.append(path);
+  clear.append(icon);
+  clear.setAttribute('aria-label', `清除来源筛选：${label}`);
+  clear.title = '清除来源筛选';
+  clear.addEventListener('click', () => {
+    sourceFilter = null;
+    expandedTitleGroups.clear();
+    renderHistorySnapshot();
+    queryInput.focus();
+  });
+  sourceFilterBar.append(caption, name, clear);
+}
+
+function createResultHost(groupKey, pageUrl) {
   const host = document.createElement('button');
   host.className = 'result-host';
   const label = groupNameOverrides.get(groupKey) || groupKey;
@@ -581,29 +664,62 @@ function createResultHost(groupKey) {
   host.dataset.groupKey = groupKey;
   host.title = label === groupKey ? groupKey : `${label}（${groupKey}）`;
   host.type = 'button';
-  host.title += ' · 点击修改分组名';
-  host.setAttribute('aria-label', `修改分组名：${label}`);
+  host.title += ' · 点击筛选，右键修改分组名';
+  host.setAttribute('aria-label', `筛选来源：${label}`);
   host.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    renameGroup({
-      key: groupKey, label, originalLabel: groupKey, isGroupRenamed: groupNameOverrides.has(groupKey)
-    });
+    sourceFilter = groupKey;
+    expandedTitleGroups.clear();
+    renderHistorySnapshot();
+    sourceFilterBar.querySelector('button')?.focus();
+  });
+  const editSource = (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    renameGroup({ key: groupKey, label, originalLabel: groupKey, isGroupRenamed: groupNameOverrides.has(groupKey) });
+  };
+  host.addEventListener('contextmenu', editSource);
+  host.addEventListener('keydown', (event) => {
+    if (event.key === 'F2') editSource(event);
   });
   const text = document.createElement('span');
   text.className = 'result-host-label';
   text.textContent = label;
+  if (pageUrl && globalThis.chrome?.runtime?.getURL) {
+    const icon = document.createElement('img');
+    icon.className = 'result-source-icon';
+    icon.width = 14;
+    icon.height = 14;
+    icon.alt = '';
+    icon.loading = 'lazy';
+    const favicon = new URL(globalThis.chrome.runtime.getURL('_favicon/'));
+    favicon.searchParams.set('pageUrl', pageUrl);
+    favicon.searchParams.set('size', '32');
+    icon.src = favicon.href;
+    host.classList.add('has-source-icon');
+    icon.addEventListener('error', () => {
+      icon.remove();
+      host.classList.remove('has-source-icon');
+    }, { once: true });
+    host.append(icon);
+  }
   host.append(text);
   return host;
 }
 
-function createResultMeta(item, { aggregate = false, groupKey = null } = {}) {
+function createResultMeta(item, { groupKey = null } = {}) {
   const meta = document.createElement('div');
   meta.className = 'result-meta';
   const visitCount = item.totalVisitCount ?? item.visitCount ?? 0;
-  if (groupKey) meta.append(createResultHost(groupKey));
-  if (isPopup || sortOrder !== 'recent') meta.append(createTag(formatVisitTime(item.lastVisitTime)));
-  meta.append(createTag(`${aggregate ? '合计 ' : ''}${visitCount} 次访问`));
+  if (groupKey) meta.append(createResultHost(groupKey, item.url || item.items?.[0]?.url));
+  if (!isPopup && sortOrder !== 'recent') meta.append(createTag(formatVisitTime(item.lastVisitTime)));
+  meta.append(createTag(`${visitCount} 次访问`));
+  if (isPopup) {
+    const time = createTag(formatRelativeVisitTime(item.lastVisitTime));
+    time.title = formatVisitTime(item.lastVisitTime);
+    meta.append(time);
+  }
   if (item.isTitleRenamed && searchSnapshot?.range !== 'all' &&
     Number(item.lastVisitTime ?? 0) < searchSnapshot?.rangeStartTime) {
     const note = createTag('跨时间保留');
@@ -630,10 +746,9 @@ function createRenameButton(item) {
 
 function createRenameDialog() {
   return createRenameDialogShell({
-    title: '修改网页名',
-    fieldLabel: '网页名',
+    title: '重命名网页',
+    fieldLabel: '名称',
     extraKey: 'url',
-    showExtra: false,
     onCancel: closeRenameDialog,
     onRestore: restoreRenameDialogOriginalTitle,
     onDialogCancel: () => {
@@ -655,6 +770,7 @@ function createRenameDialogShell({
 }) {
   const element = document.createElement('dialog');
   element.className = 'rename-dialog';
+  element.setAttribute('aria-label', titleText);
 
   const formElement = document.createElement('form');
   formElement.className = 'rename-dialog-form';
@@ -700,7 +816,7 @@ function createRenameDialogShell({
   cancelButton.textContent = '取消';
 
   const restoreButton = document.createElement('button');
-  restoreButton.className = 'secondary-button';
+  restoreButton.className = 'secondary-button rename-restore';
   restoreButton.type = 'button';
   restoreButton.textContent = '还原原名';
 
@@ -709,8 +825,15 @@ function createRenameDialogShell({
   saveButton.type = 'submit';
   saveButton.textContent = '保存';
 
-  actions.append(restoreButton, cancelButton, saveButton);
+  const primaryActions = document.createElement('div');
+  primaryActions.className = 'rename-primary-actions';
+  primaryActions.append(cancelButton, saveButton);
+  actions.append(restoreButton, primaryActions);
   formElement.append(header, field, status, actions);
+  input.addEventListener('input', () => {
+    saveButton.disabled = input.disabled || !input.value.trim() ||
+      input.value.trim().replace(/\s+/g, ' ') === element.dataset.initialName;
+  });
   element.append(formElement);
 
   cancelButton.addEventListener('click', () => {
@@ -836,79 +959,6 @@ function createSortControl() {
   return label;
 }
 
-function createViewMenu() {
-  const menu = document.createElement('details');
-  menu.className = 'view-menu';
-  const trigger = document.createElement('summary');
-  trigger.className = 'view-menu-trigger';
-  trigger.textContent = '显示选项';
-  const panel = document.createElement('div');
-  panel.className = 'view-menu-panel';
-  const label = document.createElement('label');
-  label.className = 'view-option';
-  const checkbox = document.createElement('input');
-  checkbox.type = 'checkbox';
-  checkbox.id = 'show-url-path';
-  checkbox.checked = !showMinimalMode;
-  checkbox.addEventListener('change', () => {
-    showMinimalMode = !checkbox.checked;
-    editedDisplayPreferences.add('minimal');
-    syncMinimalModePresentation();
-    void rememberCurrentSearchState();
-  });
-  label.append(document.createTextNode('显示网址路径'), checkbox);
-  panel.append(label);
-  if (isPopup) panel.append(createCollapseControl());
-  menu.addEventListener('keydown', (event) => {
-    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
-    event.preventDefault();
-    menu.open = true;
-    const controls = [...panel.querySelectorAll('input, button')].filter((control) => !control.disabled);
-    const index = controls.indexOf(document.activeElement);
-    const next = event.key === 'Home' ? 0 : event.key === 'End' ? controls.length - 1
-      : index < 0 ? (event.key === 'ArrowUp' ? controls.length - 1 : 0)
-        : Math.max(0, Math.min(controls.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
-    controls[next]?.focus();
-  });
-  menu.append(trigger, panel);
-  return menu;
-}
-
-function syncMinimalModePresentation() {
-  document.body.classList.toggle('minimal-mode', showMinimalMode);
-  const checkbox = summary.querySelector('#show-url-path');
-  if (checkbox) checkbox.checked = !showMinimalMode;
-}
-
-function createCollapseControl() {
-  const label = document.createElement('label');
-  label.className = 'view-option';
-  label.title = '仅作用于当前已加载的同名分组';
-  const checkbox = document.createElement('input');
-  checkbox.type = 'checkbox';
-  checkbox.id = 'expand-groups';
-  checkbox.disabled = true;
-  checkbox.addEventListener('change', () => {
-    const expand = checkbox.checked;
-    const details = [...results.querySelectorAll('.title-group-details')];
-    if (!expand) expandedTitleGroups.clear();
-    details.forEach((element) => { element.open = expand; });
-    updateCollapseControl();
-  });
-  label.append(document.createTextNode('展开全部分组'), checkbox);
-  return label;
-}
-
-function updateCollapseControl() {
-  const checkbox = summary.querySelector('#expand-groups');
-  if (!checkbox) return;
-  const details = [...results.querySelectorAll('.title-group-details')];
-  const expandedCount = details.filter((element) => element.open).length;
-  checkbox.disabled = details.length === 0;
-  checkbox.checked = details.length > 0 && expandedCount === details.length;
-  checkbox.indeterminate = expandedCount > 0 && expandedCount < details.length;
-}
-
 function createTag(text) {
   const tag = document.createElement('span');
   tag.className = 'tag';
@@ -916,11 +966,13 @@ function createTag(text) {
   return tag;
 }
 
-function createRenamedTag() {
+function createResultStateIcon(label, icon) {
   const tag = document.createElement('span');
-  tag.className = 'renamed-tag';
-  tag.textContent = '已重命名';
-  tag.title = '当前显示的是自定义网页名';
+  tag.className = 'result-state-icon';
+  tag.title = label;
+  tag.setAttribute('role', 'img');
+  tag.setAttribute('aria-label', label);
+  tag.append(icon);
   return tag;
 }
 
@@ -933,19 +985,20 @@ function renderError(error, retry = () => liveSearch.submit()) {
   emptyState.hidden = false;
   emptyState.replaceChildren();
   const message = document.createElement('p');
-  message.textContent = error.message || '读取历史记录失败';
+  message.textContent = '暂时无法读取历史记录，请重试。';
+  message.title = error.message || '读取历史记录失败';
   emptyState.append(message, createRecoveryButton('重试', retry));
   setStatus('错误');
 }
 
-function setLoading() {
+function setLoading(message = '正在搜索…') {
   searchPending = true;
   results.setAttribute('aria-busy', 'true');
   if (!results.children.length) {
     emptyState.hidden = false;
-    emptyState.textContent = '正在读取历史记录…';
+    emptyState.textContent = message;
   }
-  setStatus('搜索中');
+  setStatus(message);
 }
 
 function setStatus(text, { error = false } = {}) {
@@ -963,11 +1016,12 @@ function renderEmptyState() {
   emptyState.replaceChildren();
   const heading = document.createElement('p');
   heading.className = 'empty-heading';
-  heading.textContent = '没有找到匹配页面';
+  const hasConditions = Boolean(sourceFilter || searchSnapshot?.query || showRenamedOnly || searchSnapshot?.range !== 'all');
+  heading.textContent = hasConditions ? '没有找到匹配页面' : '暂无可显示的历史记录';
   const hint = document.createElement('p');
   hint.textContent = showRenamedOnly ? '当前仅显示已命名页面，可以清除筛选再试。'
     : searchSnapshot?.range !== 'all' ? '当前时间范围内没有结果，可以搜索全部时间。'
-      : '试试更短的标题或曾用名。';
+      : searchSnapshot?.query ? '试试更短的标题或曾用名。' : '浏览网页后，历史记录会自动出现在这里。';
   const actions = document.createElement('div');
   actions.className = 'empty-actions';
   if (searchSnapshot?.range !== 'all') actions.append(createRecoveryButton('搜索全部时间', () => {
@@ -1002,8 +1056,10 @@ function renameItem(item) {
   renameSession.open(item);
   renameDialog.input.value = item.title || item.url || '';
   renameDialog.url.textContent = item.url || '';
+  renameDialog.url.title = item.url || '';
   renameDialog.status.textContent = '';
   renameDialog.canRestore = Boolean(item.isTitleRenamed);
+  renameDialog.element.dataset.initialName = renameDialog.input.value.trim().replace(/\s+/g, ' ');
   setRenamePending(renameDialog, false);
 
   openRenameDialog(renameDialog);
@@ -1029,15 +1085,25 @@ async function restoreRenameDialogOriginalTitle() {
 
 function setRenamePending(dialog, pending) {
   dialog.input.disabled = pending;
-  dialog.saveButton.disabled = pending;
+  dialog.saveButton.disabled = pending || !dialog.input.value.trim() ||
+    getRenameDialogInputValue(dialog) === dialog.element.dataset.initialName;
   dialog.restoreButton.disabled = pending || !dialog.canRestore;
-  if (pending) dialog.status.textContent = '';
+  dialog.restoreButton.hidden = !dialog.canRestore;
+  dialog.saveButton.textContent = pending ? '处理中…' : '保存';
+  if (pending) dialog.status.textContent = '正在保存更改…';
 }
 
 function runRenameOperation(session, dialog, operation, close) {
   return session.run(operation, {
     pending: (value) => setRenamePending(dialog, value),
-    success: close,
+    success: () => {
+      close();
+      setStatus('更改已保存');
+      statusPill.parentElement.classList.remove('visually-hidden');
+      setTimeout(() => {
+        if (statusPill.textContent === '更改已保存') statusPill.parentElement.classList.add('visually-hidden');
+      }, 2000);
+    },
     error: (error) => { dialog.status.textContent = error.message || '操作失败。'; }
   });
 }
@@ -1048,6 +1114,7 @@ function renameGroup(group) {
   groupRenameDialog.key.textContent = group.originalLabel || group.key || '';
   groupRenameDialog.status.textContent = '';
   groupRenameDialog.canRestore = Boolean(group.isGroupRenamed);
+  groupRenameDialog.element.dataset.initialName = groupRenameDialog.input.value.trim().replace(/\s+/g, ' ');
   setRenamePending(groupRenameDialog, false);
 
   openRenameDialog(groupRenameDialog);

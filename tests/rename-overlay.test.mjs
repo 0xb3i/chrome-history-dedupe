@@ -153,6 +153,7 @@ class FakeElement {
       const value = part.trim();
       if (value.startsWith('.')) return node.className === value.slice(1);
       if (value === '[data-restore-available]') return 'restoreAvailable' in node.dataset;
+      if (value === '[data-save-action]') return 'saveAction' in node.dataset;
       return node.tag === value;
     });
     return this.children.flatMap((child) => [

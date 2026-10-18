@@ -409,14 +409,12 @@ export function normalizeCapturedPageMap(value) {
 export function normalizeLastSearchState(value) {
   const query = normalizeTitle(value?.query);
   const showRenamedOnly = Boolean(value?.showRenamedOnly);
-  const showMinimalMode = Boolean(value?.showMinimalMode);
 
   return {
     query,
     range: normalizeSearchRange(value?.range),
     sortOrder: normalizeSortOrder(value?.sortOrder),
-    showRenamedOnly,
-    showMinimalMode
+    showRenamedOnly
   };
 }
 

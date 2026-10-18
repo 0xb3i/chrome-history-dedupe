@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "历史记录去重搜索",
-  "version": "1.0.2",
+  "version": "1.10.6",
   "minimum_chrome_version": "105",
   "incognito": "not_allowed",
   "description": "搜索 Chrome 历史记录，并自动合并同一页面的重复 URL 与子标签页。",
@@ -12,6 +12,7 @@
     "128": "icons/icon-128.png"
   },
   "permissions": [
+    "favicon",
     "activeTab",
     "history",
     "scripting",

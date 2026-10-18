@@ -51,9 +51,10 @@ export function createSelectControl(select, { label }) {
   });
 
   function sync() {
-    value.textContent = [...select.options].find((option) => option.value === select.value)?.textContent ?? '';
+    const selectedText = [...select.options].find((option) => option.value === select.value)?.textContent ?? '';
+    value.textContent = selectedText;
     button.title = value.textContent;
-    button.setAttribute('aria-label', `${label}：${value.textContent}`);
+    button.setAttribute('aria-label', `${label}：${selectedText}`);
     for (const option of options) option.setAttribute('aria-selected', String(option.dataset.value === select.value));
   }
 

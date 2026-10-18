@@ -6,26 +6,16 @@
     <title>Deduped History Search</title>
     <link rel="stylesheet" href="src/styles.css">
   </head>
-  <body class="popup-body">
+  <body class="popup-body minimal-mode">
     <main class="popup shell">
-      <header class="popup-header">
-        <div class="brand">
-          <h1>历史记录</h1>
-          <span class="version-badge" id="app-version"></span>
-        </div>
-        <a class="shortcut-link icon-link" href="history.html" target="_blank" rel="noreferrer" aria-label="打开完整页" title="打开完整页">
-          <span aria-hidden="true">↗</span>
-        </a>
-      </header>
-
-      <form class="controls popup-controls" id="search-form">
+      <form class="controls popup-controls launcher-search" id="search-form">
         <label class="field">
           <span class="visually-hidden">搜索历史记录</span>
-          <input id="query" type="search" placeholder="搜索标题或曾用名" autocomplete="off" autofocus>
+          <input id="query" type="search" placeholder="搜索标题或曾用名" aria-describedby="search-keyboard-hint" autocomplete="off" autofocus>
         </label>
 
-        <button class="primary-button" type="submit">搜索</button>
       </form>
+      <p id="search-keyboard-hint" class="visually-hidden">输入后自动搜索。按向下箭头选择结果，回车打开，Esc 返回搜索框。</p>
 
       <div class="filter-bar" role="group" aria-label="筛选历史记录">
         <label class="field range-control">
@@ -42,18 +32,34 @@
           <input id="renamed-only" type="checkbox">
           <span>仅已命名</span>
         </label>
+        <div class="result-controls" id="result-controls" aria-label="排序方式"></div>
       </div>
 
       <div class="status-line visually-hidden">
         <span id="status-pill" role="status">待搜索</span>
       </div>
 
-      <section class="summary" id="summary" aria-label="搜索结果与显示选项">
+      <section class="summary" id="summary" aria-label="搜索结果数量">
         <span class="result-count" role="status">正在读取历史记录…</span>
-        <div class="result-controls" id="result-controls"></div>
       </section>
-      <ol class="results popup-results" id="results"></ol>
-      <section class="empty-state" id="empty-state">输入关键词或直接搜索最近历史。</section>
+      <div class="popup-result-scroll" tabindex="-1" aria-label="搜索结果列表">
+        <ol class="results popup-results" id="results"></ol>
+        <section class="empty-state" id="empty-state">输入关键词或直接搜索最近历史。</section>
+      </div>
+      <footer class="launcher-footer" aria-label="主题与完整页入口">
+        <label class="theme-control">
+            <span class="visually-hidden">主题</span>
+            <select id="theme-color" aria-label="主题">
+              <option value="blue" selected>蓝色</option>
+              <option value="orange">暖橙</option>
+              <option value="green">绿色</option>
+              <option value="neutral">中性</option>
+            </select>
+          </label>
+          <a class="shortcut-link icon-link" href="history.html" target="_blank" rel="noreferrer" aria-label="打开完整页" title="打开完整页">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M8 5H5v14h14v-3M13 5h6v6M19 5 10 14" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </footer>
     </main>
 
     <script type="module" src="src/history-page.js"></script>

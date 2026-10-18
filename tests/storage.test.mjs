@@ -23,15 +23,13 @@ test('last search state normalizes query and display preferences and the selecte
       query: '  MEEGO   story  ',
       range: 'week',
       sortOrder: 'recent',
-      showRenamedOnly: true,
-      showMinimalMode: true
+      showRenamedOnly: true
     }),
     {
       query: 'MEEGO story',
       range: 'week',
       sortOrder: 'recent',
-      showRenamedOnly: true,
-      showMinimalMode: true
+      showRenamedOnly: true
     }
   );
 });
@@ -41,20 +39,19 @@ test('last search state defaults missing or invalid ranges to all history', () =
     query: 'MEEGO',
     range: 'all',
     sortOrder: 'default',
-    showRenamedOnly: false,
-    showMinimalMode: false
+    showRenamedOnly: false
   });
 });
 
 test('loading and saving search preferences preserves the selected range', async () => {
   const values = { [LAST_SEARCH_STATE_STORAGE_KEY]: {
-    query: 'Old handbook', range: 'day', showRenamedOnly: false, showMinimalMode: true
+    query: 'Old handbook', range: 'day', showRenamedOnly: false
   } };
   globalThis.chrome = createStorageChrome(values);
   try {
     const loaded = await loadLastSearchState();
     assert.deepEqual(loaded, {
-      query: 'Old handbook', range: 'day', sortOrder: 'default', showRenamedOnly: false, showMinimalMode: true
+      query: 'Old handbook', range: 'day', sortOrder: 'default', showRenamedOnly: false
     });
     await saveLastSearchState({ ...loaded, range: 'week' });
     assert.deepEqual(values[LAST_SEARCH_STATE_STORAGE_KEY], { ...loaded, range: 'week' });

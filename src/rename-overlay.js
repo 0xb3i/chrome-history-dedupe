@@ -38,16 +38,21 @@
 
     const panel = document.createElement('form');
     panel.className = 'panel';
-    panel.setAttribute('aria-label', '修改网页名');
+    panel.setAttribute('aria-label', '重命名网页');
 
     const title = document.createElement('h2');
-    title.textContent = '修改网页名';
+    title.textContent = '重命名网页';
+
+    const url = document.createElement('p');
+    url.className = 'target-url';
+    url.textContent = draft.url;
+    url.title = draft.url;
 
     const field = document.createElement('label');
     field.className = 'field';
 
     const label = document.createElement('span');
-    label.textContent = '网页名';
+    label.textContent = '名称';
 
     const input = document.createElement('input');
     input.type = 'text';
@@ -65,10 +70,11 @@
 
     const restoreButton = document.createElement('button');
     restoreButton.type = 'button';
-    restoreButton.className = 'secondary';
+    restoreButton.className = 'secondary restore';
     restoreButton.dataset.restoreAvailable = String(draft.hasTitleOverride);
     restoreButton.textContent = '还原原名';
     restoreButton.disabled = !draft.hasTitleOverride;
+    restoreButton.hidden = !draft.hasTitleOverride;
 
     const cancelButton = document.createElement('button');
     cancelButton.type = 'button';
@@ -77,13 +83,26 @@
 
     const saveButton = document.createElement('button');
     saveButton.type = 'submit';
+    saveButton.dataset.saveAction = '';
     saveButton.className = 'primary';
     saveButton.textContent = '保存';
+    panel.dataset.initialName = input.value.trim().replace(/\s+/g, ' ');
+    saveButton.disabled = true;
+    input.addEventListener('input', () => {
+      saveButton.disabled = !input.value.trim() || input.value.trim().replace(/\s+/g, ' ') === panel.dataset.initialName;
+    });
 
-    actions.append(restoreButton, cancelButton, saveButton);
-    panel.append(title, field, status, actions);
+    const primaryActions = document.createElement('div');
+    primaryActions.className = 'primary-actions';
+    primaryActions.append(cancelButton, saveButton);
+    actions.append(restoreButton, primaryActions);
+    panel.append(title, url, field, status, actions);
     overlay.append(panel);
     shadow.append(createStyle(), overlay);
+    chrome.storage?.local?.get?.('history-ui-color', (saved) => {
+      const theme = saved?.['history-ui-color'];
+      if (['blue', 'orange', 'green', 'neutral'].includes(theme)) host.dataset.themeColor = theme;
+    });
 
     const protectRenameKeystroke = (event) => {
       if (!event.composedPath().includes(host)) {
@@ -209,10 +228,14 @@
     for (const control of panel.querySelectorAll('input, button')) {
       control.disabled = isPending;
     }
+    panel.querySelector('[data-save-action]').textContent = isPending ? '处理中…' : '保存';
 
     if (!isPending) {
       const restoreButton = panel.querySelector('[data-restore-available]');
       restoreButton.disabled = restoreButton.dataset.restoreAvailable !== 'true';
+      const input = panel.querySelector('input');
+      panel.querySelector('[data-save-action]').disabled = !input.value.trim() ||
+        input.value.trim().replace(/\s+/g, ' ') === panel.dataset.initialName;
     }
 
     if (isPending) {
@@ -248,6 +271,28 @@
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "PingFang SC", "Microsoft YaHei", sans-serif;
       }
 
+      :host {
+        --accent: #1264d6;
+        --accent-hover: #0958d9;
+        --accent-active: #0958d9;
+        --text: #26282c;
+        --muted: #636b76;
+        --line: #e1e6ee;
+        --selection: #e3efff;
+      }
+      :host([data-theme-color="orange"]) {
+        --accent: #b65e19; --accent-hover: #8c4210; --accent-active: #8c4210;
+        --text: #2d2925; --muted: #71685f; --line: #e9e1d7; --selection: #fff0dc;
+      }
+      :host([data-theme-color="green"]) {
+        --accent: #32816a; --accent-hover: #205b49; --accent-active: #205b49;
+        --text: #252d29; --muted: #626f67; --line: #dde8e1; --selection: #e3f3e9;
+      }
+      :host([data-theme-color="neutral"]) {
+        --accent: #45454a; --accent-hover: #252528; --accent-active: #252528;
+        --text: #262629; --muted: #626268; --line: #d5d5db; --selection: #ebebef;
+      }
+      input::selection { background: var(--selection); color: var(--text); }
       .overlay {
         align-items: center;
         background: rgba(0, 0, 0, 0.45);
@@ -266,9 +311,9 @@
         border-radius: 8px;
         box-shadow: 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05);
         box-sizing: border-box;
-        color: rgba(0, 0, 0, 0.88);
+        color: var(--text);
         display: grid;
-        gap: 14px;
+        gap: 12px;
         margin: 0;
         max-width: min(480px, calc(100vw - 32px));
         padding: 20px 24px 16px;
@@ -276,7 +321,7 @@
       }
 
       h2 {
-        color: rgba(0, 0, 0, 0.88);
+        color: var(--text);
         font-size: 16px;
         font-weight: 600;
         line-height: 1.5;
@@ -289,17 +334,17 @@
       }
 
       .field span {
-        color: rgba(0, 0, 0, 0.88);
+        color: var(--text);
         font-size: 14px;
         font-weight: 400;
       }
 
       input {
         background: #ffffff;
-        border: 1px solid #d9d9d9;
+        border: 1px solid var(--line);
         border-radius: 6px;
         box-sizing: border-box;
-        color: rgba(0, 0, 0, 0.88);
+        color: var(--text);
         font: inherit;
         font-size: 14px;
         line-height: 1.5714;
@@ -311,16 +356,26 @@
       }
 
       input:hover {
-        border-color: #4096ff;
+        border-color: var(--accent-hover);
       }
 
       input:focus {
-        border-color: #1677ff;
-        box-shadow: 0 0 0 2px rgba(5, 145, 255, 0.1);
+        border-color: #c4c9d1;
+        box-shadow: none;
+      }
+
+      .target-url {
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+        margin: -6px 0 0;
+        white-space: nowrap;
+        text-overflow: ellipsis;
+        overflow: hidden;
       }
 
       .status {
-        color: #ff4d4f;
+        color: #b43838;
         font-size: 12px;
         margin: -2px 0 0;
       }
@@ -335,7 +390,7 @@
         background: #ffffff;
         border-radius: 8px;
         box-shadow: 0 6px 16px 0 rgba(0, 0, 0, 0.08), 0 3px 6px -4px rgba(0, 0, 0, 0.12), 0 9px 28px 8px rgba(0, 0, 0, 0.05);
-        color: rgba(0, 0, 0, 0.88);
+        color: var(--text);
         display: flex;
         font-size: 14px;
         gap: 8px;
@@ -353,7 +408,7 @@
         align-items: center;
         border: 1.5px solid currentColor;
         border-radius: 50%;
-        color: #389e0d;
+        color: #35704b;
         display: inline-flex;
         font-size: 10px;
         font-weight: 700;
@@ -380,11 +435,21 @@
         }
       }
 
-      .actions {
+      .primary-actions {
         display: flex;
         gap: 8px;
-        justify-content: flex-end;
+        margin-left: auto;
       }
+
+      .actions {
+        display: flex;
+        align-items: center;
+        width: 100%;
+        gap: 8px;
+        margin-top: 8px;
+      }
+
+      [hidden] { display: none; }
 
       button {
         border-radius: 6px;
@@ -406,41 +471,34 @@
 
       .secondary {
         background: #ffffff;
-        border: 1px solid #d9d9d9;
-        color: rgba(0, 0, 0, 0.88);
+        border: 1px solid var(--line);
+        color: var(--text);
       }
 
       .secondary:hover:not(:disabled) {
-        border-color: #4096ff;
-        color: #4096ff;
+        border-color: var(--accent-hover);
+        color: var(--accent-hover);
       }
 
       .primary {
-        background: #1677ff;
-        border: 1px solid #1677ff;
+        background: var(--accent);
+        border: 1px solid var(--accent);
         box-shadow: none;
         color: #ffffff;
       }
 
       .primary:hover {
-        background: #4096ff;
-        border-color: #4096ff;
+        background: var(--accent-hover);
+        border-color: var(--accent-hover);
       }
 
       .primary:active {
-        background: #0958d9;
-        border-color: #0958d9;
+        background: var(--accent-active);
+        border-color: var(--accent-active);
       }
 
       @media (max-width: 520px) {
-        .actions {
-          display: grid;
-          grid-template-columns: 1fr 1fr 1fr;
-        }
-
-        button {
-          padding-inline: 8px;
-        }
+        button { padding-inline: 12px; }
       }
     `;
     return style;

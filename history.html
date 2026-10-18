@@ -6,7 +6,7 @@
     <title>Deduped History Search</title>
     <link rel="stylesheet" href="src/styles.css">
   </head>
-  <body class="page-body">
+  <body class="page-body minimal-mode">
     <main class="shell">
       <header class="topbar">
         <div class="brand">
@@ -19,12 +19,21 @@
             <button class="shortcut-link" id="import-user-data" type="button" title="从备份恢复，保留现有名称">恢复</button>
             <input id="user-data-file" type="file" accept=".json,application/json" aria-label="选择备份文件" hidden>
           </div>
+          <label class="theme-control">
+            <span class="visually-hidden">主题</span>
+            <select id="theme-color" aria-label="主题">
+              <option value="blue" selected>蓝色</option>
+              <option value="orange">暖橙</option>
+              <option value="green">绿色</option>
+              <option value="neutral">中性</option>
+            </select>
+          </label>
           <button class="shortcut-link" id="shortcut-settings" type="button">快捷键</button>
         </div>
       </header>
       <p class="user-data-status" id="user-data-status" role="status" aria-live="polite" aria-atomic="true" hidden></p>
 
-      <form class="controls" id="search-form">
+      <form class="controls launcher-search" id="search-form">
         <label class="field">
           <span class="visually-hidden">搜索历史记录</span>
           <input id="query" type="search" placeholder="搜索标题或曾用名" autocomplete="off" autofocus>
@@ -54,7 +63,7 @@
         <span id="status-pill" role="status">待搜索</span>
       </div>
 
-      <section class="summary" id="summary" aria-label="搜索结果与显示选项">
+      <section class="summary" id="summary" aria-label="搜索结果与排序">
         <span class="result-count" role="status">正在读取历史记录…</span>
         <div class="result-controls" id="result-controls"></div>
       </section>

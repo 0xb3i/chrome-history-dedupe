@@ -18,18 +18,19 @@ test('history and popup share the same search entry and visible controls', () =>
   for (const html of [historyHtml, popupHtml]) {
     assert.match(html, /<script type="module" src="src\/history-page\.js"><\/script>/);
     assert.match(html, /href="src\/styles\.css"/);
-    for (const id of ['search-form', 'query', 'range', 'results', 'summary', 'app-version']) {
+    for (const id of ['search-form', 'query', 'range', 'results', 'summary']) {
       assert.equal(html.match(new RegExp(`id="${id}"`, 'g'))?.length, 1, id);
     }
     assert.match(html, /input id="query" type="search"/);
     assert.doesNotMatch(html, /id="(?:mode|max-results)"/);
-    assert.match(html, /class="version-badge"/);
     assert.match(html, /<span class="visually-hidden">时间筛选<\/span>/);
     assert.match(html, /id="renamed-only" type="checkbox"/);
     for (const value of ['day', 'week', 'month', 'quarter', 'all']) {
       assert.match(html, new RegExp(`<option value="${value}"`));
     }
   }
+  assert.match(historyHtml, /id="app-version"/);
+  assert.doesNotMatch(popupHtml, /popup-header|id="app-version"/);
   assert.match(historyPageJs, /chrome\?\.runtime\?\.getManifest\?\.\(\)\?\.version/);
 });
 
@@ -57,28 +58,32 @@ test('background wires browser events to navigation tracking and history mainten
 test('popup has a fixed measurement width and vertical scrolling', () => {
   assert.match(popupHtml, /<html class="popup-root" lang="zh-CN">/);
   assert.match(css, /\.popup-root \{[^}]*width: 580px;[^}]*min-width: 580px;[^}]*overflow: hidden;/);
-  assert.match(css, /\.popup-body \{[^}]*width: 580px;[^}]*max-height: 560px;[^}]*overflow-x: hidden;[^}]*overflow-y: auto;/);
+  assert.match(css, /\.popup-body \{[^}]*width: 580px;[^}]*max-height: 560px;[^}]*overflow-x: hidden;[^}]*overflow-y: hidden;/);
+  assert.match(css, /\.popup-result-scroll \{[^}]*min-height: 0;[^}]*overflow-y: auto;/);
   assert.match(css, /\.controls \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
   assert.match(css, /\.popup-controls \{[^}]*padding: 0;[^}]*border: 0;/);
+  assert.match(css, /\.popup \{[^}]*padding: 36px 16px 12px;/);
+  assert.match(css, /@media \(max-width: 760px\)\s*\{\s*\.page-body \.shell/);
+  assert.doesNotMatch(css, /@media[^{}]*\{\s*\.shell\s*\{/);
 });
 
 test('result menu triggers and panels share their geometry and retain independent surface rules', () => {
-  assert.match(css, /\.result-controls \.select-combobox,\s*\.view-menu \{[^}]*width: var\(--menu-control-width\);/);
-  assert.match(css, /\.result-controls \.select-combobox-menu,\s*\.view-menu-panel \{[^}]*width: var\(--menu-panel-width\);/);
-  assert.match(css, /\.select-combobox-menu,\s*\.view-menu-panel \{[^}]*position: absolute;[^}]*background: var\(--surface\);/);
+  assert.match(css, /\.result-controls \.select-combobox \{[^}]*width: var\(--menu-control-width\);/);
+  assert.match(css, /\.result-controls \.select-combobox-menu \{[^}]*width: var\(--menu-panel-width\);/);
+  assert.match(css, /\.select-combobox-menu \{[^}]*position: absolute;[^}]*background: var\(--surface\);/);
   assert.match(css, /\.select-combobox-option \{[^}]*display: grid;/);
   assert.match(css, /\.summary \{[^}]*display: flex;/);
 });
 
 test('result rows keep dividers and clip long titles before action buttons', () => {
   assert.ok(css.includes('.results > li + li'));
-  assert.ok(css.includes('border-top: 1px solid var(--line);'));
+  assert.ok(css.includes('border-top: 0;'));
   assert.match(css, /\.result-item \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
   assert.match(css, /\.result-content \{[^}]*min-width: 0;/);
   assert.match(css, /\.result-title-row \{[^}]*display: flex;/);
   assert.match(css, /\.result-title \{[^}]*overflow: hidden;[^}]*text-overflow: ellipsis;[^}]*white-space: nowrap;/);
   assert.match(css, /\.result-title:has\(mark\),\s*\.result-match:has\(mark\) \{[^}]*display: -webkit-box;[^}]*-webkit-box-orient: vertical;[^}]*-webkit-line-clamp: 3;[^}]*overflow: hidden;/);
-  assert.match(css, /\.renamed-tag \{[^}]*flex: 0 0 auto;/);
+  assert.match(css, /\.result-state-icons \{[^}]*flex: 0 0 auto;/);
   assert.ok(css.includes('.popup-results .result-url'));
 });
 
@@ -110,10 +115,25 @@ test('result actions expose icon labels and pressed-state affordances', () => {
   assert.match(css, /\.minimal-mode \.result-url \{[^}]*display: none;/);
 });
 
-test('renamed tags stay compact and result rows do not select text accidentally', () => {
-  assert.ok(historyPageJs.includes("tag.textContent = '已重命名'"));
-  assert.match(css, /\.renamed-tag \{[^}]*background: transparent;/);
-  assert.match(css, /\.renamed-tag \{[^}]*color: var\(--subtle\);/);
+test('theme palettes cover surfaces and content rather than only accent colors', () => {
+  for (const theme of ['orange', 'green', 'neutral']) {
+    const palette = css.match(new RegExp(`:root\\[data-theme-color="${theme}"\\] \\{([^}]+)\\}`))?.[1];
+    assert.ok(palette, `${theme} palette exists`);
+    for (const token of ['bg', 'canvas', 'surface-muted', 'surface-hover', 'text', 'muted',
+      'subtle', 'line', 'line-card', 'line-soft', 'scroll-thumb', 'source-0', 'source-5', 'accent']) {
+      assert.ok(palette.includes(`--${token}:`), `${theme} defines ${token}`);
+    }
+  }
+  const popup = css.match(/\.popup-body \{([^}]+)\}/)?.[1];
+  assert.ok(popup.includes('var(--bg)'));
+  assert.ok(!popup.includes('gradient'));
+});
+
+test('result state icons stay compact and result rows do not select text accidentally', () => {
+  assert.ok(historyPageJs.includes("label.textContent = isPopup ? '已命名' : '自定义'"));
+  assert.ok(!historyPageJs.includes('createNamedIcon'));
+  assert.match(css, /\.result-state-icon \{[^}]*color: var\(--subtle\);/);
+  assert.match(css, /\.result-state-icon svg \{[^}]*width: 12px;[^}]*height: 12px;/);
   assert.doesNotMatch(css, /\.result-item-renamed/);
   assert.match(css, /\.result-item \{[^}]*user-select: none;/);
 });
@@ -142,7 +162,7 @@ test('inline rename surface uses shadow DOM and labeled actions', () => {
   for (const label of ['保存', '还原原名', '取消']) {
     assert.ok(renameOverlayJs.includes(`textContent = '${label}'`));
   }
-  assert.doesNotMatch(renameOverlayJs, /url\.textContent = draft\.url/);
+  assert.match(renameOverlayJs, /url\.textContent = draft\.url/);
   assert.ok(renameOverlayJs.includes('deduped-history:init-inline-rename'));
 });
 
