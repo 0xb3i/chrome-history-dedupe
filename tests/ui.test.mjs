@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-const historyHtml = readText('../history.html');
+const optionsHtml = readText('../options.html');
+const settingsPageJs = readText('../src/settings-page.js');
 const popupHtml = readText('../popup.html');
 const renameHtml = readText('../rename.html');
 const historyPageJs = readText('../src/history-page.js');
@@ -14,33 +15,28 @@ const css = readText('../src/styles.css');
 // Static surface and entry-point contracts only. Ordering, asynchronous results,
 // rename sessions and index publication are tested through their public behavior
 // in search-state, rename-session, history-index and history-index-store tests.
-test('history and popup share the same search entry and visible controls', () => {
-  for (const html of [historyHtml, popupHtml]) {
-    assert.match(html, /<script type="module" src="src\/history-page\.js"><\/script>/);
-    assert.match(html, /href="src\/styles\.css"/);
-    for (const id of ['search-form', 'query', 'range', 'results', 'summary']) {
-      assert.equal(html.match(new RegExp(`id="${id}"`, 'g'))?.length, 1, id);
-    }
-    assert.match(html, /input id="query" type="search"/);
-    assert.doesNotMatch(html, /id="(?:mode|max-results)"/);
-    assert.match(html, /<span class="visually-hidden">时间筛选<\/span>/);
-    assert.match(html, /id="renamed-only" type="checkbox"/);
-    for (const value of ['day', 'week', 'month', 'quarter', 'all']) {
-      assert.match(html, new RegExp(`<option value="${value}"`));
-    }
+test('popup is the only search surface and settings live on the options page', () => {
+  assert.match(popupHtml, /<script type="module" src="src\/history-page\.js"><\/script>/);
+  assert.match(popupHtml, /href="src\/styles\.css"/);
+  for (const id of ['search-form', 'query', 'range', 'results', 'summary', 'renamed-only', 'open-settings',
+    'actions-panel', 'actions-list']) {
+    assert.equal(popupHtml.match(new RegExp(`id="${id}"`, 'g'))?.length, 1, id);
   }
-  assert.match(historyHtml, /id="app-version"/);
-  assert.doesNotMatch(popupHtml, /popup-header|id="app-version"/);
-  assert.match(historyPageJs, /chrome\?\.runtime\?\.getManifest\?\.\(\)\?\.version/);
-});
-
-test('the search form and shortcut settings have entry handlers', () => {
+  assert.match(popupHtml, /input id="query" type="search"/);
+  assert.match(popupHtml, /<span class="visually-hidden">时间筛选<\/span>/);
+  for (const value of ['day', 'week', 'month', 'quarter', 'all']) {
+    assert.match(popupHtml, new RegExp(`<option value="${value}"`));
+  }
+  assert.doesNotMatch(popupHtml, /history\.html/);
+  for (const id of ['user-data-controls', 'export-user-data', 'import-user-data', 'user-data-file', 'user-data-status',
+    'shortcut-settings', 'app-version', 'theme-color']) {
+    assert.match(optionsHtml, new RegExp(`id="${id}"`), id);
+  }
+  assert.match(optionsHtml, /src="src\/settings-page\.js"/);
+  assert.match(settingsPageJs, /chrome\?\.runtime\?\.getManifest\?\.\(\)\?\.version/);
+  assert.ok(settingsPageJs.includes('chrome://extensions/shortcuts'));
   assert.ok(historyPageJs.includes("form.addEventListener('submit'"));
-  assert.match(historyHtml, /id="shortcut-settings"/);
-  assert.doesNotMatch(historyHtml, /href="chrome:\/\/extensions\/shortcuts"/);
-  assert.ok(historyPageJs.includes("querySelector('#shortcut-settings')"));
-  assert.ok(historyPageJs.includes('chrome?.tabs?.create'));
-  assert.ok(historyPageJs.includes('chrome://extensions/shortcuts'));
+  assert.ok(historyPageJs.includes('openOptionsPage'));
 });
 
 test('background wires browser events to navigation tracking and history maintenance', () => {
@@ -55,6 +51,25 @@ test('background wires browser events to navigation tracking and history mainten
   assert.ok(backgroundJs.includes('commands?.onCommand?.addListener'));
 });
 
+test('popup is a launcher: search row, single-line results and a keyed action bar', () => {
+  assert.match(popupHtml, /<div class="launcher-bar">[\s\S]*id="search-form"[\s\S]*id="view-options"/);
+  assert.match(popupHtml, /<footer class="launcher-footer">\s*<section class="summary" id="summary"/);
+  assert.doesNotMatch(popupHtml, /launcher-home|icons\/icon/);
+  assert.match(popupHtml, /id="primary-key-hint"/);
+  assert.match(popupHtml, /<kbd data-mod-key>/);
+  assert.match(css, /\.popup-body \.popup-results \.result-item \.result-title,[^{]*\{[^}]*white-space: nowrap;/);
+  assert.match(css, /\.actions-panel \{[^}]*position: absolute;/);
+  assert.match(css, /\.popup-body \.rename-dialog-actions \.primary-button::after \{[^}]*content: "↵";/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.view-options-panel/);
+});
+
+test('extension icon renders from vector sources at every manifest size', () => {
+  const manifest = JSON.parse(readText('../manifest.json'));
+  for (const size of ['16', '32', '48', '128']) assert.equal(manifest.icons[size], `icons/icon-${size}.png`);
+  assert.match(readText('../icons/icon.svg'), /viewBox="0 0 128 128"/);
+  assert.match(readText('../icons/icon-small.svg'), /viewBox="0 0 32 32"/);
+});
+
 test('popup has a fixed measurement width and vertical scrolling', () => {
   assert.match(popupHtml, /<html class="popup-root" lang="zh-CN">/);
   assert.match(css, /\.popup-root \{[^}]*width: 580px;[^}]*min-width: 580px;[^}]*overflow: hidden;/);
@@ -63,7 +78,6 @@ test('popup has a fixed measurement width and vertical scrolling', () => {
   assert.match(css, /\.controls \{[^}]*grid-template-columns: minmax\(0, 1fr\) auto;/);
   assert.match(css, /\.popup-controls \{[^}]*padding: 0;[^}]*border: 0;/);
   assert.match(css, /\.popup \{[^}]*padding: 36px 16px 12px;/);
-  assert.match(css, /@media \(max-width: 760px\)\s*\{\s*\.page-body \.shell/);
   assert.doesNotMatch(css, /@media[^{}]*\{\s*\.shell\s*\{/);
 });
 
@@ -104,13 +118,11 @@ test('search clear control uses the flat Ant allowClear affordance', () => {
   assert.ok(css.includes("viewBox='64 64 896 896'"));
 });
 
-test('result actions expose icon labels and pressed-state affordances', () => {
-  for (const label of ['修改网页名']) {
-    assert.ok(historyPageJs.includes(`button.title = '${label}'`));
+test('row actions live in the ⌘K panel rather than as buttons on each row', () => {
+  assert.doesNotMatch(historyPageJs, /item-action-button/);
+  for (const label of ['打开', '复制链接', '重命名网页…', '只看此来源', '修改来源名称…', '同名的其他链接']) {
+    assert.ok(historyPageJs.includes(`'${label}'`), label);
   }
-  assert.ok(historyPageJs.includes("button.setAttribute('aria-label', label)"));
-  assert.ok(historyPageJs.includes('aria-pressed'));
-  assert.ok(css.includes('.item-action-button svg'));
   assert.ok(css.includes('.rename-filter input:checked'));
   assert.match(css, /\.minimal-mode \.result-url \{[^}]*display: none;/);
 });
@@ -130,7 +142,7 @@ test('theme palettes cover surfaces and content rather than only accent colors',
 });
 
 test('result state icons stay compact and result rows do not select text accidentally', () => {
-  assert.ok(historyPageJs.includes("label.textContent = isPopup ? '已命名' : '自定义'"));
+  assert.ok(historyPageJs.includes("label.textContent = '已命名'"));
   assert.ok(!historyPageJs.includes('createNamedIcon'));
   assert.match(css, /\.result-state-icon \{[^}]*color: var\(--subtle\);/);
   assert.match(css, /\.result-state-icon svg \{[^}]*width: 12px;[^}]*height: 12px;/);

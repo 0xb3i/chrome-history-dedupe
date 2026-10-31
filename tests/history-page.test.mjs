@@ -72,6 +72,8 @@ async function createPage({ file = 'popup.html', items = [], titles = new Map(),
   const writeViews = [];
   const opened = [];
   const listeners = { storage: [], runtime: [] };
+  const optionsOpened = [];
+  const tabsCreated = [];
   document.addEventListener('click', (event) => {
     const link = event.target.closest?.('a');
     if (link) opened.push(link.href);
@@ -89,8 +91,10 @@ async function createPage({ file = 'popup.html', items = [], titles = new Map(),
     chrome: {
       runtime: { getURL: (path) => `chrome-extension://test-extension/${path}`,
         getManifest: () => ({ version: 'test' }), sendMessage: (_message, callback) => callback({ ok: true }),
-        onMessage: { addListener: (listener) => listeners.runtime.push(listener) } },
-      storage: { onChanged: { addListener: (listener) => listeners.storage.push(listener) } }
+        onMessage: { addListener: (listener) => listeners.runtime.push(listener) },
+        openOptionsPage: () => optionsOpened.push(true) },
+      storage: { onChanged: { addListener: (listener) => listeners.storage.push(listener) } },
+      tabs: { create: ({ url }) => tabsCreated.push(url) }
     }
   });
   vm.runInContext(executable, context, { filename: pageUrl.pathname });
@@ -104,14 +108,17 @@ async function createPage({ file = 'popup.html', items = [], titles = new Map(),
     return event;
   };
   return {
-    document, one, all, opened, writes, writeViews, listeners,
+    document, one, all, opened, writes, writeViews, listeners, optionsOpened, tabsCreated,
     titles: () => all('#results a.result-title').map((link) => link.textContent),
     fire,
-    expandTitleGroups() {
-      for (const details of all('.title-group-details')) {
-        details.open = true;
-        fire(details, 'toggle');
-      }
+    openActions(row) {
+      row?.querySelector('a.result-title')?.focus();
+      fire(document, 'keydown', { key: 'k', ctrlKey: true, metaKey: true });
+      return [...document.querySelectorAll('#actions-list .actions-item')];
+    },
+    action(label) {
+      return [...document.querySelectorAll('#actions-list .actions-item')]
+        .find((item) => item.querySelector('.actions-item-label').textContent === label);
     },
     input(value, properties = {}) { one('#query').value = value; fire(one('#query'), 'input', properties); },
     async changeRenamedOnly(checked) {
@@ -144,23 +151,20 @@ test('long callback titles and late historical matches stay compact with full to
   const alias = `${'历史内容'.repeat(100)}login 资料`;
   const items = [pageItem(callback, 'callback'),
     pageItem('当前名称', 'current', { searchableTitles: ['当前名称', alias] })];
-  for (const file of ['popup.html', 'history.html']) {
-    const page = await createPage({ file, items, saved: { query: 'login', range: 'all' } });
-    const link = page.all('.result-title').find((link) => link.href === items[0].url);
-    assert.ok(link.textContent.length <= 162);
-    assert.ok(link.textContent.endsWith('…'));
-    assert.equal(link.querySelector('mark').textContent, 'login');
-    assert.ok(link.title.includes(callback));
-    link.click();
-    assert.deepEqual(page.opened, [items[0].url]);
-    const reason = page.one('.result-match');
-    assert.ok(reason.textContent.length < 180);
-    assert.equal(reason.querySelector('mark').textContent, 'login');
-    assert.equal(reason.title, alias);
-  }
+  const page = await createPage({ items, saved: { query: 'login', range: 'all' } });
+  const link = page.all('.result-title').find((link) => link.href === items[0].url);
+  assert.ok(link.textContent.length <= 162);
+  assert.ok(link.textContent.endsWith('…'));
+  assert.equal(link.querySelector('mark').textContent, 'login');
+  assert.ok(link.title.includes(callback));
+  link.click();
+  assert.deepEqual(page.opened, [items[0].url]);
+  const aliased = page.all('.result-title').find((link) => link.href === items[1].url);
+  assert.equal(page.one('.result-match'), null);
+  assert.ok(aliased.title.endsWith(`曾用名：${alias}`));
   const grouped = await createPage({ items: [pageItem(callback, 'first'), pageItem(callback, 'second')],
     saved: { query: 'login', range: 'all' } });
-  const title = grouped.one('.title-group-summary .result-title');
+  const title = grouped.one('.title-group .result-title');
   assert.ok(title.textContent.length <= 162);
   assert.ok(title.title.includes(callback));
 });
@@ -178,8 +182,8 @@ test('real page updates after typing and IME commit, and renders title matches a
   await page.flush();
   assert.deepEqual(page.titles(), ['达人周会', '增长计划']);
   assert.equal(page.one('.result-title mark').textContent, '达人');
-  assert.equal(page.one('.result-match').textContent, '曾用名：达人复盘');
-  assert.equal(page.one('.result-match mark').textContent, '达人');
+  assert.equal(page.one('.result-match'), null);
+  assert.match(page.all('.result-title')[1].title, /曾用名：达人复盘$/);
   assert.equal(page.one('#results').getAttribute('aria-busy'), 'false');
   page.fire(page.one('#query'), 'compositionstart');
   page.input('购物', { isComposing: true });
@@ -205,113 +209,45 @@ test('popup flattens domains, reveals 30 more results, and restarts pagination f
   assert.ok(page.button('显示更多（剩余 5 项）'));
 });
 
-test('full page time and renamed filters apply immediately to flat results', async () => {
+test('time and renamed filters apply immediately; renamed pages ignore the range without a label', async () => {
   const old = pageItem('旧资料', 'old', { lastVisitTime: now - 100 * day });
   const renamed = pageItem('原来的名称', 'renamed', { lastVisitTime: now - 100 * day });
-  const page = await createPage({ file: 'history.html', items: [pageItem('近期页面', 'recent'), old, renamed],
+  const page = await createPage({ items: [pageItem('近期页面', 'recent'), old, renamed],
     titles: new Map([[renamed.dedupeKey, { title: '已整理资料', targetUrl: renamed.url, updatedAt: now }]]) });
   assert.equal(page.all('.result-group').length, 0);
   await page.changeRange('day');
   assert.deepEqual(new Set(page.titles()), new Set(['近期页面', '已整理资料']));
-  assert.equal(page.one('.retained-note').textContent, '跨时间保留');
+  assert.equal(page.one('.retained-note'), null);
+  assert.equal(page.document.body.textContent.includes('跨时间保留'), false);
   await page.changeRenamedOnly(true);
   await settle();
   assert.deepEqual(page.titles(), ['已整理资料']);
   assert.equal(page.one('#renamed-only').checked, true);
 });
 
-test('full history defaults to all-time chronology with local date headings and separate same-title links', async () => {
-  const morning = new Date(2026, 8, 15, 9).getTime();
-  const priorDay = new Date(2026, 8, 14, 23).getTime();
-  const old = pageItem('旧资料', 'old', { lastVisitTime: priorDay, totalVisitCount: 900 });
-  const middleUrl = 'https://other.example.com/interleaved';
-  const items = [old,
-    pageItem('同名资料', 'latest', { lastVisitTime: morning + 3600000 }),
-    pageItem('其他站点', '', { url: middleUrl, dedupeKey: middleUrl, lastVisitTime: morning }),
-    pageItem('同名资料', 'earlier', { lastVisitTime: priorDay + 1000 })];
-  const readViews = [];
-  const page = await createPage({ file: 'history.html', items,
-    titles: new Map([[old.dedupeKey, { title: '已整理资料', targetUrl: old.url, updatedAt: now }]]),
-    loadPreferences: async (view) => { readViews.push(view); return null; }
-  });
-  const urls = () => page.all('.history-result .result-title').map((link) => link.href);
-  const expected = [items[1].url, items[2].url, items[3].url, old.url];
-  assert.deepEqual(readViews, ['history']);
-  assert.equal(page.one('#range').value, 'all');
-  assert.equal(page.one('#sort-order').value, 'recent');
-  assert.deepEqual(urls(), expected);
-  assert.equal(page.all('#results details').length, 0);
-  assert.equal(page.one('#expand-groups'), null);
-  assert.deepEqual(page.all('.history-visit-time').map((time) => time.getAttribute('datetime')),
-    [morning + 3600000, morning, priorDay + 1000, priorDay].map((value) => new Date(value).toISOString()));
-  const formatter = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'full' });
-  assert.deepEqual(page.all('.history-day h2').map((heading) => heading.textContent),
-    [formatter.format(morning), formatter.format(priorDay)]);
-  page.listeners.storage[0]({ [imports.PINNED_URLS_STORAGE_KEY]: { newValue: [old.url] } }, 'local');
-  assert.deepEqual(urls(), expected);
-  assert.equal(page.all('.history-result .result-item-pinned').length, 0);
-  assert.equal(page.all('.history-result.result-item-pinned').length, 1);
-  for (const row of page.all('.history-result')) {
-    assert.ok(row.querySelector('.rename-button'));
-    assert.ok(row.querySelector('.pin-button'));
-    assert.ok(row.querySelector('.result-host'));
-  }
-  page.fire(page.one('.history-result .result-host'), 'contextmenu');
-  assert.ok(page.one('dialog[open]'));
-  page.input('同名');
-  await page.flush();
-  assert.equal(page.writes.at(-1).sortOrder, 'recent');
-  assert.equal(page.writeViews.at(-1), 'history');
-  assert.deepEqual(urls(), [items[1].url, items[3].url]);
+test('popup follows the theme saved on the settings page without changing results', async () => {
+  const page = await createPage({ items: [pageItem('页面', 'entry')] });
+  assert.equal(page.document.documentElement.dataset.themeColor, 'blue');
+  const before = page.all('.result-title').map((link) => link.href);
+  for (const listener of page.listeners.storage) listener({ 'history-ui-color': { newValue: 'green' } }, 'local');
+  assert.equal(page.document.documentElement.dataset.themeColor, 'green');
+  assert.deepEqual(page.all('.result-title').map((link) => link.href), before);
 });
 
-test('color preview switches tokens without changing results on both pages', async () => {
-  for (const file of ['popup.html', 'history.html']) {
-    const page = await createPage({ file, items: [pageItem('页面', 'entry')] });
-    assert.equal(page.document.documentElement.dataset.themeColor, 'blue');
-    const before = page.all('.result-title').map((link) => link.href);
-    const select = page.one('#theme-color');
-    select.value = 'green';
-    page.fire(select, 'change');
-    assert.equal(page.document.documentElement.dataset.themeColor, 'green');
-    assert.deepEqual(page.all('.result-title').map((link) => link.href), before);
-  }
-});
-
-test('full history paginates individual links, keeps date headers unique and resets after filtering', async () => {
-  const items = Array.from({ length: 55 }, (_, index) => pageItem('同名页面', `entry-${index}`, {
-    lastVisitTime: new Date(2026, 8, 15, 12).getTime() - index * 1000
-  }));
-  const page = await createPage({ file: 'history.html', items, saved: null });
-  assert.equal(page.all('.history-result').length, 50);
-  assert.equal(page.all('.history-day').length, 1);
-  assert.equal(page.one('.title-group'), null);
-  page.button('显示更多（剩余 5 项）').click();
-  assert.equal(page.all('.history-result').length, 55);
-  assert.equal(page.all('.history-day').length, 1);
-  assert.equal(page.document.activeElement.href, items[50].url);
-  assert.equal(page.one('.results-more'), null);
-  await page.changeSort('name');
-  assert.equal(page.all('.history-result').length, 50);
-  assert.equal(page.all('.history-day').length, 0);
-  await page.changeSort('recent');
-  assert.equal(page.all('.history-day').length, 1);
-});
-
-test('sorting controls order both pages, preserve pins, and apply to refreshed data', async () => {
+test('sorting controls order results, preserve pins, and apply to refreshed data', async () => {
   const items = [
     pageItem('项目 C', 'c', { totalVisitCount: 30, lastVisitTime: now - 3 * day }),
     pageItem('项目 A', 'a', { totalVisitCount: 10, lastVisitTime: now }),
     pageItem('项目 B', 'b', { totalVisitCount: 20, lastVisitTime: now - day })
   ];
-  for (const file of ['popup.html', 'history.html']) {
+  {
     let index = { revision: 1, pageItems: items };
-    const page = await createPage({ file, saved: { query: '项目', range: 'all' }, loadIndex: async () => index });
+    const page = await createPage({ saved: { query: '项目', range: 'all' }, loadIndex: async () => index });
     assert.equal(page.one('#search-form #range'), null);
     assert.equal(page.one('.filter-bar #range'), page.one('#range'));
     assert.equal(page.one('.filter-bar #renamed-only'), page.one('#renamed-only'));
     assert.equal(page.one('#result-controls #sort-order'), page.one('#sort-order'));
-    assert.deepEqual(page.titles(), file === 'popup.html' ? ['项目 C', '项目 B', '项目 A'] : ['项目 A', '项目 B', '项目 C']);
+    assert.deepEqual(page.titles(), ['项目 C', '项目 B', '项目 A']);
     await page.changeSort('recent');
     assert.deepEqual(page.titles(), ['项目 A', '项目 B', '项目 C']);
     await page.changeSort('visits');
@@ -326,14 +262,14 @@ test('sorting controls order both pages, preserve pins, and apply to refreshed d
     index = { revision: 2, pageItems: [{ ...items[0], lastVisitTime: now + day }, ...items.slice(1)] };
     page.listeners.runtime[0]({ type: imports.HISTORY_INDEX_UPDATED_MESSAGE, revision: 2 });
     await settle();
-    assert.deepEqual(page.titles(), file === 'popup.html' ? ['项目 B', '项目 C', '项目 A'] : ['项目 C', '项目 A', '项目 B']);
+    assert.deepEqual(page.titles(), ['项目 B', '项目 C', '项目 A']);
     assert.equal(page.one('#sort-order').value, 'recent');
   }
 });
 
 test('both filters use styled listboxes with saved labels, keyboard navigation and dismissal', async () => {
-  for (const file of ['popup.html', 'history.html']) {
-    const page = await createPage({ file, items: [pageItem('页面', 'page')],
+  {
+    const page = await createPage({ items: [pageItem('页面', 'page')],
       saved: { query: '', range: 'week', sortOrder: 'name' } });
     const sort = page.one('[data-select-id="sort-order"]');
     const range = page.one('[data-select-id="range"]');
@@ -356,7 +292,7 @@ test('both filters use styled listboxes with saved labels, keyboard navigation a
     page.fire(page.document.activeElement, 'keydown', { key: 'ArrowUp' });
     assert.equal(page.document.activeElement.dataset.value, 'recent');
     page.fire(page.document.activeElement, 'keydown', { key: 'Home' });
-    assert.equal(page.document.activeElement.dataset.value, file === 'popup.html' ? 'default' : 'visits');
+    assert.equal(page.document.activeElement.dataset.value, 'default');
     page.fire(page.document.activeElement, 'keydown', { key: 'End' });
     assert.equal(page.document.activeElement.dataset.value, 'name');
     page.fire(page.document.activeElement, 'keydown', { key: 'Escape' });
@@ -403,19 +339,6 @@ test('saved sort restores, changing it resets pagination without reloading data 
   assert.equal(reads, 1);
   await page.changeSort('name');
   assert.deepEqual(page.titles().slice(0, 3), ['项目 1', '项目 2', '项目 3']);
-});
-
-test('sorting same-title links changes their expanded order while keeping the representative URL', async () => {
-  const items = [pageItem('项目', 'popular', { totalVisitCount: 10, lastVisitTime: now - day }),
-    pageItem('项目', 'recent', { totalVisitCount: 1, lastVisitTime: now })];
-  const page = await createPage({ items });
-  await page.changeSort('recent');
-  page.expandTitleGroups();
-  assert.deepEqual(page.all('.result-variant-link').map((link) => link.href), [items[1].url, items[0].url]);
-  assert.equal(page.one('.title-group-summary a').href, items[0].url);
-  await page.changeSort('visits');
-  page.expandTitleGroups();
-  assert.deepEqual(page.all('.result-variant-link').map((link) => link.href), items.map((item) => item.url));
 });
 
 test('source badges preserve tab ranking and keep group identity through filtering and group renaming', async () => {
@@ -476,145 +399,6 @@ test('empty states recover through all-time search, clearing renamed filter, and
   assert.deepEqual(page.titles(), ['旧资料']);
 });
 
-test('same-title choices expose the distinguishing parameter while preserving addresses and actions', async () => {
-  const base = pageItem('达人周会', 'wiki/weekly', { totalVisitCount: 8 });
-  const variantUrl = `${base.url}?disposable_login_token=${'abcdef'.repeat(80)}&lang=zh`;
-  const variant = { ...base, dedupeKey: variantUrl, url: variantUrl, totalVisitCount: 1 };
-  const page = await createPage({ items: [base, variant] });
-  const group = page.one('.title-group-details');
-  assert.equal(group.open, false);
-  assert.equal(group.children.length, 2);
-  assert.equal(group.querySelector('.title-group-count').textContent, '2 个链接');
-  assert.equal(group.querySelector('summary a').href, base.url);
-  assert.equal(group.querySelector('.result-meta').textContent.includes('9 次访问'), true);
-  assert.equal(page.all('.result-variant').length, 0);
-  const renameClick = page.fire(group.querySelector('.result-host'), 'contextmenu');
-  assert.equal(renameClick.defaultPrevented, true);
-  assert.equal(group.open, false);
-  assert.equal(page.all('.result-variant').length, 0);
-  assert.deepEqual(page.opened, []);
-  const renameDialog = page.one('dialog[open]');
-  assert.equal(renameDialog.querySelector('input').value, 'example.com');
-  assert.equal(page.button('还原原名', renameDialog).disabled, true);
-  page.button('取消', renameDialog).click();
-  page.expandTitleGroups();
-  const rows = page.all('.result-variant');
-  assert.equal(rows.length, 2);
-  for (const [index, row] of rows.entries()) {
-    const url = [base.url, variantUrl][index];
-    const link = row.querySelector('a');
-    assert.equal(link.querySelector('.result-choice-label').textContent, '/wiki/weekly');
-    assert.equal(link.querySelector('.result-choice-context')?.textContent ?? '', index === 0
-      ? '' : '?disposable_login_token=[隐藏1]&lang=zh');
-    assert.equal(link.title, url);
-    assert.equal(link.href, url);
-    assert.equal(row.querySelector('.result-variant-time'), null);
-    assert.equal(row.querySelector('.result-variant-visits').textContent, `${index === 0 ? 8 : 1} 次访问`);
-    assert.equal(row.querySelector('.result-meta'), null);
-    assert.equal(row.querySelectorAll('button').length, 2);
-    assert.ok(row.querySelector('.rename-button'));
-    assert.ok(row.querySelector('.pin-button'));
-    link.click();
-  }
-  assert.deepEqual(page.opened, [base.url, variantUrl]);
-  assert.equal(group.textContent.includes('abcdef'), false);
-  assert.equal(group.textContent.includes('差异'), false);
-  assert.equal(group.textContent.includes('详情'), false);
-  assert.equal(page.one('.result-choice-fields'), null);
-});
-
-test('merge request choices consistently show simplified URLs', async () => {
-  const base = 'https://code.byted.org/data/example/merge_requests/335';
-  const urls = [base, `${base}/diffs`, `${base}/commits`];
-  const page = await createPage({ items: urls.map((url, index) => pageItem('feat: model !335', '', {
-    url, dedupeKey: url, totalVisitCount: 3 - index
-  })) });
-  page.expandTitleGroups();
-  assert.deepEqual(page.all('.result-choice-label').map((label) => label.textContent), ['/data/example/merge_requests/335', '/data/example/merge_requests/335/diffs', '/data/example/merge_requests/335/commits']);
-  assert.equal(page.one('.title-group-list').textContent.includes('/data/example'), true);
-  assert.equal(page.one('.result-choice-context'), null);
-  page.all('.result-variant-link').forEach((link) => link.click());
-  assert.deepEqual(page.opened, urls);
-});
-
-test('expanded links show usage order and the group title opens the most visited search match', async () => {
-  const lessUsed = pageItem('同名页面', 'overview', {
-    totalVisitCount: 1, searchableTitles: ['同名页面', '目标'], lastVisitTime: now
-  });
-  const mostUsed = pageItem('同名页面', 'diffs', {
-    totalVisitCount: 20, searchableTitles: ['同名页面', '目标内容'], lastVisitTime: now - day
-  });
-  const older = pageItem('同名页面', 'commits', {
-    totalVisitCount: 20, searchableTitles: ['同名页面', '目标内容'], lastVisitTime: now - 2 * day
-  });
-  const page = await createPage({ items: [lessUsed, older, mostUsed], saved: { query: '目标', range: 'all' } });
-  page.expandTitleGroups();
-  assert.deepEqual(page.all('.result-variant-link').map((link) => link.href), [mostUsed.url, older.url, lessUsed.url]);
-  assert.deepEqual(page.all('.result-variant-visits').map((count) => count.textContent),
-    ['20 次访问', '20 次访问', '1 次访问']);
-  const header = page.one('.title-group-summary');
-  assert.ok(header.querySelector('.result-meta').textContent.includes('41 次访问'));
-  assert.equal(header.querySelector('.result-match').textContent, '曾用名：目标');
-  assert.equal(header.querySelector('a').href, mostUsed.url);
-  assert.equal(header.querySelector('a').target, '_blank');
-});
-
-test('choices retain long paths and queries in a single simplified URL', async () => {
-  const id = 'resource-'.repeat(30);
-  const page = await createPage({ items: [
-    pageItem('平台', `app/models/${id}?view=usage`, { totalVisitCount: 3 }),
-    pageItem('平台', `app/models/${id}?view=cost`, { totalVisitCount: 2 }),
-    pageItem('平台', 'app/dashboard', { totalVisitCount: 1 })
-  ] });
-  page.expandTitleGroups();
-  assert.deepEqual(page.all('.result-choice-label').map((label) => label.textContent),
-    [`/app/models/${id}`, `/app/models/${id}`, '/app/dashboard']);
-  assert.deepEqual(page.all('.result-choice-context').map((context) => context.textContent), ['?view=usage', '?view=cost']);
-});
-
-test('large collapsed title groups defer link DOM and append bounded pages, retaining expansion on refresh', async () => {
-  const items = Array.from({ length: 5000 }, (_, index) => pageItem('平台', `app?id=${index}`, {
-    totalVisitCount: 5000 - index
-  }));
-  const page = await createPage({ items });
-  assert.equal(page.all('#results .result-item').length, 1);
-  assert.ok(page.all('#results *').length < 30);
-  assert.equal(page.one('.title-group-count').textContent, '5000 个链接');
-  assert.equal(page.one('.title-group-summary a').href, items[0].url);
-  page.expandTitleGroups();
-  assert.equal(page.all('.result-variant').length, 8);
-  const firstLink = page.one('.result-variant-link');
-  page.button('显示更多链接（剩余 4992 个）').click();
-  assert.equal(page.all('.result-variant').length, 16);
-  assert.equal(page.one('.result-variant-link'), firstLink);
-  assert.equal(page.document.activeElement.href, items[8].url);
-  page.listeners.storage[0]({ [imports.GROUP_NAME_OVERRIDES_STORAGE_KEY]: {
-    newValue: { 'example.com': '平台服务' }
-  } }, 'local');
-  await page.flush();
-  assert.equal(page.one('.title-group-details').open, true);
-  assert.equal(page.all('.result-variant').length, 16);
-  const details = page.one('.title-group-details');
-  details.open = false;
-  page.fire(details, 'toggle');
-  page.expandTitleGroups();
-  assert.equal(page.all('.result-variant').length, 16);
-  page.input('app');
-  await page.flush();
-  assert.equal(page.all('.result-variant').length, 0);
-});
-
-test('small title groups load all remaining links and never duplicate rows on toggle', async () => {
-  const page = await createPage({ items: Array.from({ length: 11 }, (_, index) => pageItem('平台', `app?id=${index}`)) });
-  page.expandTitleGroups();
-  assert.equal(page.all('.result-variant').length, 8);
-  page.button('显示更多链接（剩余 3 个）').click();
-  assert.equal(page.all('.result-variant').length, 11);
-  assert.equal(page.one('.title-group-list .results-more'), null);
-  page.expandTitleGroups();
-  assert.equal(page.all('.result-variant').length, 11);
-});
-
 test('input keys retain native behavior and submitting a search does not open a result', async () => {
   const page = await createPage({ items: [pageItem('甲文档', 'a'), pageItem('乙文档', 'b')] });
   const input = page.one('#query');
@@ -628,6 +412,138 @@ test('input keys retain native behavior and submitting a search does not open a 
   assert.deepEqual(page.opened, []);
   page.one('#results a.result-title').click();
   assert.deepEqual(page.opened, ['https://example.com/b']);
+});
+
+test('recency sort splits results into pinned, today, yesterday, this week and month sections', async () => {
+  const at = (daysAgo, hour = 12) => { const date = new Date(); date.setDate(date.getDate() - daysAgo); date.setHours(hour, 0, 0, 0); return date.getTime(); };
+  const items = [pageItem('今天的页面', 'today', { lastVisitTime: Math.min(at(0, 0) + 1000, now) }),
+    pageItem('昨天的页面', 'yesterday', { lastVisitTime: at(1) }),
+    pageItem('前天的页面', 'earlier', { lastVisitTime: at(2) }),
+    pageItem('很早的页面', 'old', { lastVisitTime: at(40) })];
+  const page = await createPage({ items });
+  assert.equal(page.all('.result-section').length, 0);
+  await page.changeSort('recent');
+  const old = new Date(at(40));
+  const month = old.getFullYear() === new Date().getFullYear()
+    ? `${old.getMonth() + 1} 月` : `${old.getFullYear()} 年 ${old.getMonth() + 1} 月`;
+  assert.deepEqual(page.all('.result-section').map((section) => section.textContent), ['今天', '昨天', '本周', month]);
+  assert.deepEqual(page.titles(), ['今天的页面', '昨天的页面', '前天的页面', '很早的页面']);
+  page.listeners.storage[0]({ [imports.PINNED_URLS_STORAGE_KEY]: { newValue: [items[3].url] } }, 'local');
+  assert.equal(page.all('.result-section')[0].textContent, '已固定');
+});
+
+test('the filter panel only holds result filters and a settings link', async () => {
+  const page = await createPage({ items: [pageItem('甲文档', 'a')] });
+  const trigger = page.one('#view-options');
+  const panel = page.one('#view-options-panel');
+  assert.equal(panel.hidden, true);
+  assert.ok(panel.querySelector('#renamed-only'));
+  assert.ok(panel.querySelector('#sort-order'));
+  for (const id of ['theme-color', 'rename-source', 'shortcut-settings']) assert.equal(page.one(`#${id}`), null, id);
+  trigger.click();
+  assert.equal(panel.hidden, false);
+  page.fire(panel, 'keydown', { key: 'Escape' });
+  assert.equal(panel.hidden, true);
+  assert.equal(page.document.activeElement, trigger);
+  page.one('#open-settings').click();
+  assert.deepEqual(page.optionsOpened, [true]);
+});
+
+test('popup rows have no inline buttons and lay out title, source, state and time columns', async () => {
+  const renamed = pageItem('原来的名称', 'renamed');
+  const page = await createPage({ items: [pageItem('甲文档', 'a'), renamed],
+    titles: new Map([[renamed.dedupeKey, { title: '整理后的名称', targetUrl: renamed.url, updatedAt: now }]]) });
+  assert.equal(page.one('#results button.item-action-button'), null);
+  assert.equal(page.one('#results .result-actions'), null);
+  const row = page.all('.popup-results .result-item').find((item) => item.textContent.includes('整理后的名称'));
+  const columns = [...row.querySelector('.result-content').children].map((child) => child.className.split(' ')[0]);
+  assert.deepEqual(columns.filter((name) => name !== 'result-url'),
+    ['result-title-row', 'result-host', 'result-state', 'result-meta']);
+  assert.equal(row.querySelector('.result-title-row').children.length, 1, 'title row holds only the title');
+  assert.equal(row.querySelector('.result-state .result-custom-label').textContent, '已命名');
+  assert.match(row.querySelector('.result-time').title, /1 次访问/);
+  assert.equal(row.querySelector('.result-host').dataset.initial, 'E');
+  const hint = page.one('#primary-key-hint');
+  assert.equal(hint.textContent, '选择↓');
+  row.querySelector('a.result-title').focus();
+  assert.equal(hint.textContent, '打开↵');
+});
+
+test('⌘K and right-click open the focused row\'s actions: open, copy, rename, pin, source', async () => {
+  const items = [pageItem('甲文档', 'a', { totalVisitCount: 5 }),
+    pageItem('乙文档', 'b', { url: 'https://docs.example.org/b', dedupeKey: 'b' })];
+  const page = await createPage({ items });
+  const panel = page.one('#actions-panel');
+  assert.equal(panel.hidden, true);
+  const second = page.all('.popup-results .result-item').find((row) => row.textContent.includes('乙文档'));
+  const labels = page.openActions(second).map((item) => item.querySelector('.actions-item-label').textContent);
+  assert.equal(panel.hidden, false);
+  assert.equal(page.one('#actions-title').textContent, '乙文档');
+  assert.deepEqual(labels, ['打开', '复制链接', '重命名网页…', '固定到顶部', '只看此来源', '修改来源名称…']);
+  assert.equal(page.document.activeElement, page.action('打开'));
+  page.fire(panel, 'keydown', { key: 'Escape' });
+  assert.equal(panel.hidden, true);
+  assert.equal(page.document.activeElement, second.querySelector('a.result-title'));
+
+  page.openActions(second);
+  page.action('修改来源名称…').click();
+  const dialog = page.one('dialog[open]');
+  assert.equal(dialog.querySelector('h2').textContent, '修改分组名');
+  assert.equal(dialog.querySelector('input').value, 'docs.example.org');
+  page.button('取消', dialog).click();
+
+  page.fire(second, 'contextmenu');
+  assert.equal(panel.hidden, false);
+  page.action('重命名网页…').click();
+  assert.equal(page.one('dialog[open]').getAttribute('aria-label'), '重命名网页');
+  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, items[1].url);
+  page.button('取消', page.one('dialog[open]')).click();
+
+  page.openActions(second);
+  page.action('只看此来源').click();
+  assert.deepEqual(page.all('.result-title').map((link) => link.href), [items[1].url]);
+  page.one('.source-filter-clear').click();
+
+  page.openActions(page.one('.popup-results .result-item'));
+  page.action('打开').click();
+  assert.equal(page.tabsCreated.length, 1);
+});
+
+test('same-title links collapse to one row that opens the most visited link; others are listed by time in actions', async () => {
+  const at = (hoursAgo) => now - hoursAgo * 3600000;
+  const items = [pageItem('同名页面', 'overview', { totalVisitCount: 1, lastVisitTime: at(1) }),
+    pageItem('同名页面', 'diffs', { totalVisitCount: 20, lastVisitTime: at(30) }),
+    pageItem('同名页面', 'commits', { totalVisitCount: 4, lastVisitTime: at(5) })];
+  const page = await createPage({ items });
+  assert.equal(page.all('.popup-results .result-item').length, 1);
+  const row = page.one('.title-group');
+  assert.equal(row.querySelector('details'), null);
+  assert.equal(row.querySelector('.title-group-count'), null);
+  const title = row.querySelector('a.result-title');
+  assert.equal(title.href, items[1].url);
+  assert.match(title.title, /另有 2 个同名链接/);
+  assert.match(row.querySelector('.result-time').title, /25 次访问/);
+
+  page.openActions(row);
+  const others = page.action('同名的其他链接');
+  assert.equal(others.querySelector('.actions-item-detail').textContent, '2');
+  others.click();
+  assert.equal(page.one('#actions-title').textContent, '同名的其他链接（2）');
+  assert.equal(page.one('#actions-back').hidden, false);
+  const links = page.all('#actions-list .actions-item');
+  assert.deepEqual(links.map((link) => link.title), [items[0].url, items[2].url]);
+  assert.ok(links.every((link) => /次访问$/.test(link.querySelector('.actions-item-detail').textContent)));
+  page.fire(page.document.activeElement, 'keydown', { key: 'F2' });
+  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, items[0].url);
+  page.button('取消', page.one('dialog[open]')).click();
+
+  page.openActions(row);
+  page.action('同名的其他链接').click();
+  page.fire(page.one('#actions-panel'), 'keydown', { key: 'ArrowLeft' });
+  assert.equal(page.one('#actions-title').textContent, '同名页面');
+  page.action('同名的其他链接').click();
+  page.all('#actions-list .actions-item')[1].click();
+  assert.deepEqual(page.tabsCreated, [items[2].url]);
 });
 
 test('result navigation joins the page, preserves refresh focus, and leaves rename dialogs in control', async () => {
@@ -649,7 +565,8 @@ test('result navigation joins the page, preserves refresh focus, and leaves rena
   assert.equal(page.one('.popup-result-scroll').scrollTop, 90);
   page.fire(page.document.activeElement, 'keydown', { key: 'Escape' });
   assert.equal(page.document.activeElement, query);
-  page.one('.rename-button').click();
+  page.openActions(page.one('.popup-results .result-item'));
+  page.action('重命名网页…').click();
   const dialog = page.one('dialog[open]');
   assert.equal(dialog.getAttribute('aria-label'), '重命名网页');
   assert.deepEqual([...dialog.querySelector('.rename-primary-actions').children].map((button) => button.textContent),
@@ -724,9 +641,9 @@ test('source icons use the extension favicon endpoint and fall back after image 
 
 
 test('source filtering preserves search conditions and clearing restores other sites', async () => {
-  for (const file of ['popup.html', 'history.html']) {
+  {
     const items = [pageItem('页面甲', 'a'), pageItem('页面乙', 'b', { url: 'https://other.example/b', dedupeKey: 'other' })];
-    const page = await createPage({ file, items, saved: { query: '页面', range: 'all' } });
+    const page = await createPage({ items, saved: { query: '页面', range: 'all' } });
     page.one('.result-host').click();
     assert.deepEqual(page.all('.result-title').map((link) => link.href), [items[0].url]);
     assert.equal(page.one('#query').value, '页面');

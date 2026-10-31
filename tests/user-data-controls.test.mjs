@@ -10,7 +10,7 @@ const executable = source.replace(/import\s+\{[^}]+\}\s+from\s+'[^']+';/g, '')
 const settle = () => new Promise((resolve) => setImmediate(resolve));
 
 async function createControls(options = {}) {
-  const { document, window } = parseHTML(await readFile(new URL('../history.html', import.meta.url), 'utf8'));
+  const { document, window } = parseHTML(await readFile(new URL('../options.html', import.meta.url), 'utf8'));
   const blobs = [];
   const revoked = [];
   const downloads = [];
@@ -53,8 +53,6 @@ async function createControls(options = {}) {
 
 test('imports parsed backup, reports total counts and permits selecting the same file again', async () => {
   const ui = await createControls();
-  const originalStatus = ui.one('#status-pill').textContent;
-  const originalQuery = ui.one('#query').value;
   ui.one('#import-user-data').click();
   assert.equal(ui.filePickerCalls, 1);
   const text = '{"format":"history-dedupe-user-data","version":1}';
@@ -67,8 +65,6 @@ test('imports parsed backup, reports total counts and permits selecting the same
   assert.equal(ui.one('#user-data-status').hidden, false);
   assert.equal(ui.one('#user-data-file').value, '');
   assert.equal(ui.one('#import-user-data').disabled, false);
-  assert.equal(ui.one('#status-pill').textContent, originalStatus);
-  assert.equal(ui.one('#query').value, originalQuery);
   ui.selectFile(text);
   await settle();
   assert.equal(ui.imports.length, 2);
@@ -89,7 +85,7 @@ test('invalid JSON is rejected before import and errors leave controls reusable'
   assert.equal(ui.one('#user-data-status').dataset.error, 'false');
 });
 
-test('validation and file read failures surface without replacing search status', async () => {
+test('validation and file read failures surface in the settings status', async () => {
   const ui = await createControls({ importBackup: async () => { throw new Error('备份数据版本不受支持'); } });
   ui.selectFile('{}');
   await settle();
@@ -99,7 +95,6 @@ test('validation and file read failures surface without replacing search status'
   assert.match(ui.one('#user-data-status').textContent, /恢复失败：文件读取失败/);
   assert.equal(ui.imports.length, 1);
   assert.equal(ui.one('#user-data-controls').getAttribute('aria-busy'), 'false');
-  assert.equal(ui.one('#status-pill').textContent, '待搜索');
 });
 
 test('cancelling file selection leaves status untouched', async () => {

@@ -9,7 +9,7 @@
   --surface-hover: #f3f6fa;
   --text: #26282c;
   --muted: #636b76;
-  --subtle: #707985;
+  --subtle: #68717d;
   --line: #e0e8f2;
   --line-card: #dce5f0;
   --line-soft: #e1e6ee;
@@ -20,6 +20,7 @@
   --accent-active-bg: rgba(22, 119, 255, 0.035);
   --match-bg: #e3efff;
   --match-text: #003a8c;
+  --selection-bg: #cddff7;
   --success: #35704b;
   --warning: #926317;
   --danger: #b43838;
@@ -89,43 +90,6 @@ summary:focus-visible {
   padding: 28px 0 40px;
 }
 
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  min-height: 40px;
-  margin-bottom: 18px;
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  min-width: 0;
-}
-
-.topbar-actions,
-.user-data-controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
-.topbar-actions .shortcut-link {
-  min-height: 32px;
-  padding: 0 11px;
-  border-radius: var(--radius-sm);
-}
-
-.user-data-controls .shortcut-link:disabled {
-  border-color: var(--line-soft);
-  color: var(--subtle);
-  background: var(--surface-muted);
-  cursor: wait;
-}
-
 .user-data-status {
   margin: -6px 0 16px;
   color: var(--muted);
@@ -135,21 +99,6 @@ summary:focus-visible {
 
 .user-data-status[data-error="true"] {
   color: var(--danger);
-}
-
-.version-badge {
-  color: var(--subtle);
-  font-size: 12px;
-  line-height: 1;
-  white-space: nowrap;
-}
-
-.brand-mark {
-  width: 36px;
-  height: 36px;
-  flex: 0 0 auto;
-  border-radius: 10px;
-  box-shadow: 0 4px 12px -4px rgba(46, 107, 255, 0.5);
 }
 
 h1 {
@@ -218,6 +167,10 @@ h1 {
   align-items: center;
   padding: 0;
   border: 0;
+}
+
+.launcher-search {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .launcher-search .field {
@@ -746,31 +699,6 @@ h1 {
   min-width: 0;
 }
 
-.history-day {
-  padding: 14px 16px;
-  background: var(--surface-hover);
-}
-
-.history-day h2 {
-  margin: 0;
-  color: var(--text);
-  font-size: 14px;
-  font-weight: 500;
-  line-height: 1.5714;
-}
-
-.history-result {
-  grid-template-columns: 52px minmax(0, 1fr) auto;
-}
-
-.history-visit-time {
-  align-self: start;
-  color: var(--muted);
-  font-size: var(--font-size-meta);
-  line-height: var(--line-height-result);
-  font-variant-numeric: tabular-nums;
-}
-
 .result-host:hover {
   color: var(--accent);
   border-color: var(--accent-hover);
@@ -879,19 +807,6 @@ independent of result type or source. */
 .title-group-list > .result-variant + .result-variant {
   margin-top: 2px;
 }
-
-.title-group-list > .history-result.result-variant {
-  grid-template-columns: 52px minmax(0, 1fr) auto auto;
-}
-
-.history-result.result-variant > .history-visit-time {
-  grid-column: 1;
-  grid-row: 1;
-}
-
-.history-result.result-variant > .result-content { grid-column: 2; }
-.history-result.result-variant > .result-variant-stats { grid-column: 3; }
-.history-result.result-variant > .result-actions { grid-column: 4; }
 
 .result-variant .result-variant-link {
   display: -webkit-box;
@@ -1392,6 +1307,11 @@ kbd {
   color: var(--text);
 }
 
+.launcher-search input[type="search"]::selection {
+  background: var(--selection-bg);
+  color: var(--text);
+}
+
 input {
   caret-color: var(--text);
 }
@@ -1463,25 +1383,6 @@ input {
   position: absolute;
   white-space: nowrap;
   width: 1px;
-}
-
-@media (max-width: 760px) {
-  .page-body .shell {
-    width: min(100% - 20px, 1040px);
-    padding-top: 18px;
-  }
-
-  .page-body .topbar {
-    align-items: start;
-  }
-
-}
-
-@media (max-width: 460px) {
-  .page-body .topbar {
-    display: grid;
-  }
-
 }
 
 .popup-body .popup-controls .primary-button {
@@ -1656,6 +1557,7 @@ input {
   --accent-active-bg: rgba(182, 94, 25, 0.035);
   --match-bg: #fff0dc;
   --match-text: #713300;
+  --selection-bg: #f2dcc8;
   --focus: #b65e19;
   --focus-ring: rgba(182, 94, 25, 0.12);
 }
@@ -1667,7 +1569,7 @@ input {
   --surface-hover: #f0f7f3;
   --text: #252d29;
   --muted: #626f67;
-  --subtle: #707c74;
+  --subtle: #647068;
   --line: #dce9e1;
   --line-card: #d3e4d9;
   --line-soft: #dde8e1;
@@ -1686,6 +1588,7 @@ input {
   --accent-active-bg: rgba(50, 129, 106, 0.035);
   --match-bg: #e3f3e9;
   --match-text: #164b36;
+  --selection-bg: #d0e7db;
   --focus: #32816a;
   --focus-ring: rgba(50, 129, 106, 0.12);
 }
@@ -1716,6 +1619,7 @@ input {
   --accent-active-bg: rgba(69, 69, 74, 0.035);
   --match-bg: #ebebef;
   --match-text: #252528;
+  --selection-bg: #dddde5;
   --focus: #727278;
   --focus-ring: rgba(69, 69, 74, 0.12);
 }
@@ -1752,18 +1656,18 @@ input {
   margin-left: 0;
 }
 
-/* Launcher rows: title above, metadata and actions share the baseline below. */
-.popup-results .result-item:not(.result-variant) > .result-content {
+/* Shared search rows; the full page reserves its first column for visit time. */
+.popup-results .result-item > .result-content {
   display: contents;
 }
-.popup-results .result-item:not(.result-variant) > .result-content > :is(.result-title-row, .result-title, .result-match, .result-url) {
-  grid-column: 1 / -1;
+.popup-results .result-item > .result-content > :is(.result-title-row, .result-title, .result-match, .result-url) {
+  grid-column: var(--result-content-column, 1) / -1;
 }
-.popup-results .result-item:not(.result-variant) > .result-content > .result-meta {
-  grid-column: 1;
+.popup-results .result-item > .result-content > .result-meta {
+  grid-column: var(--result-content-column, 1);
 }
-.popup-results .result-item:not(.result-variant) > :is(.result-actions, .title-group-tools) {
-  grid-column: 2;
+.popup-results .result-item > :is(.result-actions, .title-group-tools) {
+  grid-column: -2;
   align-self: end;
 }
 .title-group-tools {
@@ -1858,4 +1762,1291 @@ input {
 .source-filter-clear:focus-visible {
   outline: 1px solid var(--muted);
   outline-offset: 1px;
+}
+
+/* Popup launcher: one search row, single-line results, an action bar.
+   Scoped to the popup; the full history page keeps the shared rules above. */
+.popup-body {
+  --pop-bg: #fbfbfb;
+  --pop-text: #1d1d1f;
+  --pop-secondary: #6e6e73;
+  --pop-tertiary: #8e8e93;
+  --pop-hairline: rgba(0, 0, 0, 0.08);
+  --pop-hover: rgba(0, 0, 0, 0.04);
+  --pop-selected: rgba(0, 0, 0, 0.07);
+  --pop-fill: rgba(0, 0, 0, 0.055);
+  --pop-control-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 1px 1px rgba(0, 0, 0, 0.05);
+  --pop-popover-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 8px 24px -4px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.06);
+  --pop-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.popup-body .popup {
+  height: 560px;
+  padding: 0;
+  background: var(--pop-bg);
+  color: var(--pop-text);
+}
+
+.popup-body .launcher-bar {
+  position: relative;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 56px;
+  padding-right: 12px;
+  border-bottom: 1px solid var(--pop-hairline);
+}
+
+.popup-body .launcher-bar .launcher-search {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.popup-body .launcher-search .field::before {
+  left: 18px;
+  width: 18px;
+  height: 18px;
+  background: var(--pop-tertiary);
+}
+
+.popup-body .launcher-search .field input[type="search"],
+.popup-body .launcher-search .field input[type="search"]:hover,
+.popup-body .launcher-search .field input[type="search"]:focus {
+  height: 56px;
+  padding: 0 8px 0 48px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--pop-text);
+  font-size: 18px;
+  letter-spacing: -0.01em;
+  line-height: 24px;
+}
+
+.popup-body .launcher-search .field input[type="search"]::placeholder {
+  color: var(--pop-tertiary);
+}
+
+.popup-body .popup .filter-bar {
+  position: relative;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+}
+
+/* Pop-up buttons: white, hairline, compact up/down caret. */
+.popup-body .select-combobox-button {
+  grid-template-columns: auto 10px;
+  column-gap: 6px;
+  min-height: 26px;
+  padding: 0 8px 0 10px;
+  border: 0;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.popup-body .select-combobox-arrow {
+  width: 10px;
+  height: 10px;
+  background: currentColor;
+  color: var(--pop-tertiary);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.5 4.5 6 2l2.5 2.5M3.5 7.5 6 10l2.5-2.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.popup-body .select-combobox-arrow::before {
+  display: none;
+}
+
+.popup-body .range-control .select-combobox {
+  width: auto;
+}
+
+.popup-body .range-control .select-combobox-button,
+.popup-body .range-control .select-combobox-button:is(:hover, [aria-expanded="true"]) {
+  background: #fff;
+  box-shadow: var(--pop-control-shadow);
+  color: var(--pop-text);
+}
+
+.popup-body .select-combobox-button:focus-visible {
+  outline: none;
+  box-shadow: var(--pop-control-shadow), 0 0 0 3px var(--focus-ring);
+}
+
+.popup-body .select-combobox-menu {
+  min-width: 128px;
+  border: 0;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: var(--pop-popover-shadow);
+  padding: 5px;
+}
+
+.popup-body .range-control .select-combobox-menu {
+  left: auto;
+  right: 0;
+}
+
+.popup-body .select-combobox-option {
+  grid-template-columns: 14px minmax(0, 1fr);
+  column-gap: 4px;
+  min-height: 28px;
+  padding: 4px 10px 4px 6px;
+  border-radius: 5px;
+  font-size: 13px;
+  line-height: 18px;
+  cursor: default;
+}
+
+.popup-body .select-combobox-option::before {
+  grid-column: 1;
+  content: "";
+}
+
+.popup-body .select-combobox-option:is(:hover, :focus-visible) {
+  background: var(--pop-selected);
+}
+
+.popup-body .select-combobox-option[aria-selected="true"] {
+  background: transparent;
+  color: var(--pop-text);
+  font-weight: 500;
+}
+
+.popup-body .select-combobox-option[aria-selected="true"]:is(:hover, :focus-visible) {
+  background: var(--pop-selected);
+}
+
+.popup-body .select-combobox-option[aria-selected="true"]::before {
+  content: "\2713";
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
+}
+
+.popup-body .select-combobox-option[aria-selected="true"]::after {
+  content: none;
+}
+
+/* Display options: one icon button, one small panel (also ⌘K / Ctrl+K). */
+.view-options-trigger {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pop-secondary);
+  cursor: pointer;
+  transition: background 120ms linear, color 120ms linear;
+}
+
+.view-options-trigger svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+
+.view-options-trigger circle {
+  fill: var(--pop-bg);
+}
+
+.view-options-trigger:hover,
+.view-options-trigger[aria-expanded="true"] {
+  background: var(--pop-fill);
+  color: var(--pop-text);
+}
+
+.view-options-trigger:hover circle,
+.view-options-trigger[aria-expanded="true"] circle {
+  fill: #f0f0f1;
+}
+
+.popup-body .view-options-trigger:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.view-options-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: -4px;
+  z-index: 50;
+  display: grid;
+  gap: 2px;
+  width: 248px;
+  padding: 6px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--pop-popover-shadow);
+  animation: view-options-enter 140ms var(--pop-ease) both;
+  transform-origin: top right;
+}
+
+.view-options-panel[hidden] {
+  display: none;
+}
+
+@keyframes view-options-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.popup-body .view-options-panel .rename-filter,
+.view-option-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 34px;
+  padding: 0 4px 0 10px;
+  border-radius: 6px;
+  color: var(--pop-text);
+  font-size: 13px;
+}
+
+.popup-body .view-options-panel .rename-filter:hover {
+  background: var(--pop-hover);
+}
+
+.view-option-label {
+  color: var(--pop-text);
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.popup-body .view-options-panel .result-controls {
+  margin-left: 0;
+}
+
+.popup-body .view-options-panel .select-combobox-button,
+.popup-body .view-options-panel .theme-control .select-combobox-button {
+  min-height: 26px;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--pop-secondary);
+  font-size: 13px;
+}
+
+.popup-body .view-options-panel .select-combobox-button:is(:hover, [aria-expanded="true"]) {
+  background: var(--pop-fill);
+  color: var(--pop-text);
+}
+
+.popup-body .view-options-panel .select-combobox {
+  width: auto;
+}
+
+.popup-body .view-options-panel .select-combobox-menu {
+  left: auto;
+  right: 0;
+}
+
+/* "仅显示已命名" is a macOS switch. */
+.popup-body .view-options-panel .rename-filter input {
+  position: relative;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 18px;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.14);
+  box-shadow: none;
+  transition: background 160ms var(--pop-ease);
+}
+
+.popup-body .view-options-panel .rename-filter input::after,
+.popup-body .view-options-panel .rename-filter input:checked::after {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22);
+  content: "";
+  transform: none;
+  transition: transform 160ms var(--pop-ease);
+}
+
+.popup-body .view-options-panel .rename-filter input:checked {
+  background: var(--accent);
+}
+
+.popup-body .view-options-panel .rename-filter input:checked::after {
+  transform: translateX(12px);
+}
+
+.popup-body .view-options-panel .rename-filter input:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* Section caption and source chip above the list. */
+.popup-body .launcher-footer .summary {
+  display: block;
+  min-height: 0;
+  margin: 0 auto 0 4px;
+  padding: 0;
+}
+
+.popup-body .result-count {
+  color: var(--pop-secondary);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* Day sections, as in the launcher's "Today" caption. */
+.popup-body .popup-results .result-section {
+  padding: 10px 12px 4px;
+  color: var(--pop-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+
+.popup-body .popup-results .result-section:first-child {
+  padding-top: 8px;
+}
+
+.popup-body .popup-result-scroll {
+  padding-top: 6px;
+}
+
+.popup-body .source-filter-bar {
+  align-self: flex-start;
+  max-width: calc(100% - 28px);
+  margin: 10px 14px 0;
+  padding: 0 2px 0 10px;
+  border-radius: 999px;
+  background: var(--pop-fill);
+  line-height: 24px;
+}
+
+.popup-body .source-filter-caption {
+  color: var(--pop-secondary);
+}
+
+.popup-body .source-filter-name {
+  color: var(--pop-text);
+  font-weight: 500;
+}
+
+.popup-body .source-filter-clear {
+  flex-basis: 20px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  color: var(--pop-secondary);
+}
+
+.popup-body .source-filter-clear svg {
+  width: 10px;
+  height: 10px;
+  stroke-width: 2.4;
+}
+
+.popup-body .popup-result-scroll {
+  flex: 1 1 auto;
+  padding: 0 6px 6px;
+}
+
+.popup-body .status-line {
+  margin: 8px 18px 0;
+}
+
+/* One row per page in fixed columns so every row lines up:
+   favicon | title (flexes) | source (fixed) | state slot | time.
+   The favicon lives in the source button but is drawn in the leading column. */
+.popup-body .popup-results {
+  gap: 0;
+  padding: 0;
+}
+
+.popup-body .popup-results .result-item {
+  --source-column: 112px;
+  --time-column: 54px;
+  --state-column: 16px;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--source-column) var(--time-column) var(--state-column);
+  grid-template-areas:
+    "title source time state"
+    "match match match match"
+    "url url url url";
+  align-items: center;
+  column-gap: 8px;
+  row-gap: 0;
+  min-height: 40px;
+  padding: 7px 10px 7px 42px;
+  border-radius: 8px;
+  background: transparent;
+  transition: none;
+}
+
+.popup-body .popup-results .result-item:hover,
+.popup-body .title-group-details[open] > .title-group-summary:hover {
+  background: var(--pop-hover);
+}
+
+.popup-body .popup-results .result-item.result-item-actions-open,
+.popup-body .popup-results .result-item:focus-within,
+.popup-body .title-group-details[open] > .title-group-summary:focus-within,
+.popup-body .popup-results .title-group-summary:focus-visible {
+  background: var(--pop-selected);
+}
+
+.popup-body .popup-results .result-item .result-title-row {
+  grid-area: title;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  min-height: 26px;
+}
+
+.popup-body .popup-results .result-title {
+  color: var(--pop-text);
+  font-size: 14px;
+  font-weight: 400;
+  letter-spacing: 0;
+  line-height: 20px;
+}
+
+.popup-body .popup-results .result-title:hover {
+  color: var(--pop-text);
+}
+
+.popup-body .popup-results .result-item .result-title,
+.popup-body .popup-results .result-item .result-title:has(mark) {
+  display: block;
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* macOS find highlight: a soft yellow wash with a darker underline. The wash
+   is a gradient on the text box, so it hugs the glyphs and never bleeds into an
+   ellipsis. */
+.popup-body .popup-results :is(.result-title, .result-match) mark {
+  padding: 0 1px;
+  margin: 0 -1px;
+  border-radius: 3px;
+  background: rgba(255, 204, 0, 0.26);
+  box-shadow: inset 0 -1.5px 0 rgba(214, 158, 0, 0.6);
+  color: inherit;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+
+/* Source: its own column, always starting at the same x. */
+.popup-body .popup-results .result-item .result-host {
+  grid-area: source;
+  justify-self: start;
+  min-width: 0;
+  max-width: 100%;
+  margin: 0 0 0 4px;
+  color: var(--pop-secondary);
+  font-size: 12px;
+  line-height: 20px;
+}
+
+.popup-body .popup-results .result-host:hover {
+  color: var(--pop-text);
+}
+
+.popup-body .popup-results .result-item .result-source-icon,
+.popup-body .popup-results .result-item .result-host:not(.has-source-icon)::before {
+  position: absolute;
+  top: 10px;
+  left: 12px;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  pointer-events: none;
+}
+
+.popup-body .popup-results .result-item .result-host:not(.has-source-icon)::before {
+  background: var(--source-color, var(--pop-tertiary));
+  color: #fff;
+  content: attr(data-initial);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 20px;
+  text-align: center;
+}
+
+/* State slot: one quiet icon per row — a pin, or a tag for renamed pages. */
+.popup-body .popup-results .result-state {
+  grid-area: state;
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
+  color: var(--pop-tertiary);
+}
+
+.popup-body .popup-results .result-state .result-custom-label {
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: 0;
+  background: currentColor;
+  color: var(--pop-tertiary);
+  font-size: 0;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.75 2.75h4.7l5.8 5.8-4.7 4.7-5.8-5.8z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3Ccircle cx='5.7' cy='5.7' r='1.05'/%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+/* A page that is both pinned and renamed shows the pin; the name still reads as custom. */
+.popup-body .popup-results .result-state:has(.result-state-icons) .result-custom-label {
+  display: none;
+}
+
+.popup-body .popup-results .result-state .result-state-icons {
+  margin: 0;
+  padding: 0;
+}
+
+.popup-body .popup-results .result-state .result-state-icon {
+  color: var(--pop-tertiary);
+}
+
+/* Time: fixed column, right-aligned. */
+.popup-body .popup-results .result-item .result-meta {
+  grid-area: time;
+  justify-content: flex-end;
+  flex-wrap: nowrap;
+  gap: 0;
+  margin: 0;
+  color: var(--pop-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.popup-body .popup-results .result-meta .tag {
+  color: var(--pop-secondary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.popup-body .popup-results .result-meta .tag + .tag::before {
+  content: none;
+}
+
+/* Visit counts stay in the accessible name; the row only shows recency. */
+.popup-body .popup-results .result-meta .result-visits {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.popup-body .popup-results .result-item .result-match {
+  grid-area: match;
+  margin-top: 2px;
+  color: var(--pop-secondary);
+  font-size: 12px;
+}
+
+.popup-body .popup-results .result-item .result-url {
+  grid-area: url;
+  margin-top: 2px;
+  color: var(--pop-secondary);
+}
+
+.popup-body .popup-results .results-more {
+  padding: 6px;
+}
+
+.popup-body .results-more .secondary-button {
+  min-height: 28px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--pop-secondary);
+  font-size: 13px;
+}
+
+.popup-body .results-more .secondary-button:hover {
+  background: var(--pop-fill);
+  color: var(--pop-text);
+}
+
+/* Empty, loading and error states. */
+.popup-body .popup .empty-state {
+  margin: 0;
+  padding: 72px 24px;
+  border: 0;
+  background: transparent;
+  color: var(--pop-secondary);
+  font-size: 13px;
+}
+
+.popup-body .popup .empty-state::before {
+  width: 28px;
+  height: 28px;
+  margin: 0 auto 12px;
+  border: 0;
+  background: var(--pop-tertiary);
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round'%3E%3Ccircle cx='10.5' cy='10.5' r='6.5'/%3E%3Cpath d='m15.5 15.5 4.5 4.5'/%3E%3C/g%3E%3C/svg%3E") center / contain no-repeat;
+}
+
+.popup-body .popup .empty-state p {
+  margin: 4px 0 0;
+}
+
+.popup-body .popup .empty-heading {
+  color: var(--pop-text);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.popup-body .empty-actions {
+  margin-top: 14px;
+}
+
+.popup-body .secondary-button,
+.popup-body .primary-button {
+  min-height: 28px;
+  padding: 0 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.popup-body .secondary-button {
+  border: 0;
+  background: #fff;
+  box-shadow: var(--pop-control-shadow);
+  color: var(--pop-text);
+}
+
+.popup-body .secondary-button:hover {
+  background: #fff;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.24), 0 1px 2px rgba(0, 0, 0, 0.08);
+  color: var(--pop-text);
+}
+
+.popup-body .rename-dialog {
+  border-radius: 12px;
+}
+
+/* Action bar: where you are on the left, what Enter and ⌘K do on the right. */
+.popup-body .launcher-footer {
+  flex: 0 0 40px;
+  gap: 8px;
+  min-height: 40px;
+  margin: 0;
+  padding: 0 10px 0 12px;
+  border-top: 1px solid var(--pop-hairline);
+  background: rgba(0, 0, 0, 0.018);
+  color: var(--pop-secondary);
+  font-size: 12px;
+}
+
+.popup-body .launcher-footer .key-hint {
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.popup-body .key-hint-label {
+  margin-right: 2px;
+}
+
+.popup-body .launcher-footer .key-hint:first-of-type .key-hint-label {
+  color: var(--pop-text);
+  font-weight: 500;
+}
+
+.key-hint-divider {
+  width: 1px;
+  height: 14px;
+  margin: 0 4px;
+  background: var(--pop-hairline);
+}
+
+.popup-body kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: var(--pop-fill);
+  color: var(--pop-secondary);
+  font: 500 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .view-options-panel {
+    animation: none;
+  }
+
+  .popup-body .view-options-panel .rename-filter :is(input, input::after) {
+    transition: none;
+  }
+}
+
+/* Popup rename sheet: title and address on top, one large field, an action bar
+   that names its keys. Esc cancels and Enter saves through the native dialog. */
+.popup-body .rename-dialog {
+  width: min(440px, calc(100vw - 48px));
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 12px;
+  background: var(--pop-bg);
+  color: var(--pop-text);
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 20px 50px -12px rgba(0, 0, 0, 0.32), 0 3px 10px rgba(0, 0, 0, 0.08);
+}
+
+.popup-body .rename-dialog[open] {
+  animation: rename-sheet-enter 160ms var(--pop-ease) both;
+}
+
+@keyframes rename-sheet-enter {
+  from {
+    opacity: 0;
+    transform: scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.popup-body .rename-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.popup-body .rename-dialog-form {
+  gap: 0;
+  padding: 0;
+}
+
+.popup-body .rename-dialog-header {
+  gap: 2px;
+  padding: 16px 18px 12px;
+}
+
+.popup-body .rename-dialog-header h2 {
+  color: var(--pop-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 20px;
+}
+
+.popup-body .rename-dialog-url {
+  color: var(--pop-tertiary);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.popup-body .rename-dialog-form > .field {
+  margin: 0;
+  padding: 0 18px 16px;
+}
+
+.popup-body .rename-dialog-form > .field > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.popup-body .rename-dialog-form > .field input {
+  min-height: 36px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 7px;
+  background: #fff;
+  box-shadow: var(--pop-control-shadow);
+  color: var(--pop-text);
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.popup-body .rename-dialog-form > .field input:hover {
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.24), 0 1px 1px rgba(0, 0, 0, 0.05);
+}
+
+.popup-body .rename-dialog-form > .field input:focus {
+  box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--focus-ring);
+}
+
+.popup-body .rename-dialog-form > .field input::selection {
+  background: #b3d7ff;
+  color: var(--pop-text);
+}
+
+.popup-body .rename-dialog-status {
+  margin: -8px 18px 12px;
+  color: var(--pop-secondary);
+  font-size: 12px;
+}
+
+.popup-body .rename-dialog-actions {
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px 8px 12px;
+  border-top: 1px solid var(--pop-hairline);
+  background: rgba(0, 0, 0, 0.018);
+}
+
+.popup-body .rename-dialog-actions .rename-primary-actions {
+  gap: 6px;
+}
+
+/* Restore is a quiet text action; it only matters for renamed pages. */
+.popup-body .rename-dialog-actions .rename-restore,
+.popup-body .rename-dialog-actions .rename-restore:hover {
+  padding: 0 8px;
+  background: transparent;
+  box-shadow: none;
+  color: var(--pop-secondary);
+  font-weight: 400;
+}
+
+.popup-body .rename-dialog-actions .rename-restore:hover:not(:disabled) {
+  background: var(--pop-fill);
+  color: var(--pop-text);
+}
+
+.popup-body .rename-dialog-actions .rename-restore:disabled {
+  opacity: 0.45;
+}
+
+.popup-body .rename-dialog-actions .secondary-button:not(.rename-restore),
+.popup-body .rename-dialog-actions .primary-button {
+  gap: 7px;
+  padding: 0 6px 0 11px;
+}
+
+.popup-body .rename-dialog-actions .secondary-button:not(.rename-restore) {
+  background: transparent;
+  box-shadow: none;
+  color: var(--pop-text);
+}
+
+.popup-body .rename-dialog-actions .secondary-button:not(.rename-restore):hover {
+  background: var(--pop-fill);
+  box-shadow: none;
+}
+
+.popup-body .rename-dialog-actions .primary-button {
+  border: 0;
+  background: var(--accent);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.2), 0 1px 1.5px rgba(0, 0, 0, 0.12);
+  color: #fff;
+}
+
+.popup-body .rename-dialog-actions .primary-button:hover:not(:disabled) {
+  background: var(--accent);
+  filter: brightness(1.06);
+}
+
+.popup-body .rename-dialog-actions .primary-button:disabled {
+  opacity: 0.45;
+  filter: none;
+}
+
+.popup-body .rename-dialog-actions :is(.secondary-button:not(.rename-restore), .primary-button)::after {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 4px;
+  font: 500 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.popup-body .rename-dialog-actions .secondary-button:not(.rename-restore)::after {
+  background: var(--pop-fill);
+  color: var(--pop-secondary);
+  content: "esc";
+}
+
+.popup-body .rename-dialog-actions .primary-button::after {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  content: "↵";
+}
+
+.popup-body .rename-dialog-actions :is(button):focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .popup-body .rename-dialog[open] {
+    animation: none;
+  }
+}
+
+/* ⌘K panel actions below the display options. */
+.view-options-separator {
+  height: 1px;
+  margin: 4px 6px;
+  border: 0;
+  background: var(--pop-hairline);
+}
+
+.view-option-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pop-text);
+  cursor: default;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.view-option-action:hover:not(:disabled) {
+  background: var(--pop-selected);
+}
+
+.popup-body .view-option-action:focus-visible {
+  outline: none;
+  background: var(--pop-selected);
+  box-shadow: none;
+}
+
+.view-option-action:disabled {
+  color: var(--pop-tertiary);
+}
+
+.view-option-action-label {
+  flex: 0 0 auto;
+}
+
+.view-option-action-detail {
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--pop-tertiary);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.view-option-action svg {
+  margin-left: auto;
+  fill: none;
+  stroke: var(--pop-tertiary);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Options page: macOS settings-style grouped cards. */
+.settings-body {
+  min-height: 100vh;
+  background: #f5f5f7;
+  color: #1d1d1f;
+}
+
+.settings {
+  width: min(560px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 48px 0 64px;
+}
+
+.settings-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 28px;
+}
+
+.settings-header h1 {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 28px;
+}
+
+.settings-version {
+  margin: 0;
+  color: #6e6e73;
+  font-size: 13px;
+}
+
+.settings-group + .settings-group {
+  margin-top: 24px;
+}
+
+.settings-group h2 {
+  margin: 0 0 8px 12px;
+  color: #6e6e73;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-card {
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.1);
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+}
+
+.settings-row-title {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.settings-row-detail {
+  margin: 2px 0 0;
+  color: #6e6e73;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.settings-row-detail kbd {
+  display: inline-grid;
+  place-items: center;
+  min-width: 20px;
+  height: 20px;
+  margin: 0 1px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.06);
+  color: #6e6e73;
+  font: 500 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.settings .user-data-controls {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.settings .secondary-button {
+  min-height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 1px 1px rgba(0, 0, 0, 0.05);
+  color: #1d1d1f;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings .secondary-button:hover:not(:disabled) {
+  background: #fff;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.24), 0 1px 2px rgba(0, 0, 0, 0.08);
+  color: #1d1d1f;
+}
+
+.settings .secondary-button:disabled {
+  cursor: wait;
+  opacity: 0.5;
+}
+
+.settings .user-data-status {
+  margin: 0;
+  padding: 10px 16px 14px;
+  border-top: 1px solid rgba(0, 0, 0, 0.06);
+  color: #6e6e73;
+  font-size: 13px;
+}
+
+.settings-note {
+  margin: 8px 12px 0;
+  color: #8e8e93;
+  font-size: 12px;
+}
+
+/* Row actions panel (⌘K / right-click): one page's actions, Raycast style. */
+.actions-panel {
+  position: absolute;
+  right: 10px;
+  bottom: 46px;
+  z-index: 60;
+  display: grid;
+  width: 300px;
+  max-height: 380px;
+  padding: 6px;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--pop-popover-shadow);
+  animation: view-options-enter 140ms var(--pop-ease) both;
+  transform-origin: bottom right;
+}
+
+.actions-panel[hidden] {
+  display: none;
+}
+
+.actions-panel-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--pop-hairline);
+  margin-bottom: 4px;
+}
+
+.actions-panel-title {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--pop-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions-panel-back {
+  display: grid;
+  place-items: center;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  margin-left: -4px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--pop-secondary);
+  cursor: default;
+}
+
+.actions-panel-back[hidden] {
+  display: none;
+}
+
+.actions-panel-back svg {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.actions-panel-back:hover {
+  background: var(--pop-fill);
+  color: var(--pop-text);
+}
+
+.actions-panel-list {
+  display: grid;
+  gap: 1px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.actions-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--pop-text);
+  cursor: default;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.actions-item.is-active:not(:disabled) {
+  outline: none;
+  background: var(--pop-selected);
+  box-shadow: none;
+}
+
+.actions-item-label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.actions-item-detail {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-left: auto;
+  overflow: hidden;
+  color: var(--pop-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.popup-body .popup {
+  position: relative;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .actions-panel {
+    animation: none;
+  }
+}
+
+.settings-select {
+  min-height: 28px;
+  padding: 0 28px 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.5 4.5 6 2l2.5 2.5M3.5 7.5 6 10l2.5-2.5' fill='none' stroke='%2386868b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") right 9px center / 10px no-repeat;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 1px 1px rgba(0, 0, 0, 0.05);
+  color: #1d1d1f;
+  font: inherit;
+  font-size: 13px;
+  appearance: none;
+}
+
+.settings-select:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 0 0 3px rgba(0, 122, 255, 0.32);
 }

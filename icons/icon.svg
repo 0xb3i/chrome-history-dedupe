@@ -1,28 +1,19 @@
-<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <path
-    d="M24 28H88C95.7 28 102 34.3 102 42V88C102 95.7 95.7 102 88 102H24C16.3 102 10 95.7 10 88V42C10 34.3 16.3 28 24 28Z"
-    stroke="#1677ff"
-    stroke-width="10"
-    stroke-linejoin="round"
-  />
-  <path
-    d="M40 12H104C111.7 12 118 18.3 118 26V74"
-    stroke="#1677ff"
-    stroke-width="10"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
-  <path
-    d="M38 66H76"
-    stroke="#1677ff"
-    stroke-width="10"
-    stroke-linecap="round"
-  />
-  <path
-    d="M68 50L84 66L68 82"
-    stroke="#1677ff"
-    stroke-width="10"
-    stroke-linecap="round"
-    stroke-linejoin="round"
-  />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3b8cff"/>
+      <stop offset="1" stop-color="#0a5ce0"/>
+    </linearGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#eef3fb"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="27" fill="url(#bg)"/>
+  <rect x="4.5" y="4.5" width="119" height="119" rx="26.5" fill="none" stroke="#fff" stroke-opacity=".18"/>
+  <rect x="38" y="22" width="60" height="70" rx="11" fill="#fff" fill-opacity=".28"/>
+  <rect x="33" y="29" width="62" height="72" rx="12" fill="#fff" fill-opacity=".5"/>
+  <rect x="28" y="36" width="64" height="74" rx="13" fill="url(#card)"/>
+  <circle cx="60" cy="73" r="20" fill="none" stroke="#0a5ce0" stroke-width="7"/>
+  <path d="M60 61v12l8 6" fill="none" stroke="#0a5ce0" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

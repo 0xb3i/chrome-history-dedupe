@@ -36,11 +36,11 @@ import {
 import { createSearchState } from './search-state.js';
 import { createRenameSession } from './rename-session.js';
 import { createHistoryPageInitializer } from './history-page-init.js';
-import { createHighlightedExcerpt, describeLinkChoices, formatRelativeVisitTime, groupItemsByDisplayTitle } from './result-presentation.js';
+import { createHighlightedExcerpt, formatRelativeVisitTime, groupItemsByDisplayTitle } from './result-presentation.js';
 import { createLiveSearch } from './live-search.js';
 import { createSelectControl } from './select-control.js';
-import { initializeUserDataControls } from './user-data-controls.js';
 import { createResultNavigation } from './result-navigation.js';
+import { applySavedTheme, applyTheme, THEME_STORAGE_KEY } from './theme.js';
 
 const SNAPSHOT_RENDER_DEBOUNCE_MS = 50;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
@@ -50,16 +50,14 @@ const form = document.querySelector('#search-form');
 const queryInput = document.querySelector('#query');
 const rangeSelect = document.querySelector('#range');
 const renamedOnlyCheckbox = document.querySelector('#renamed-only');
-const shortcutSettingsButton = document.querySelector('#shortcut-settings');
+const openSettingsButton = document.querySelector('#open-settings');
+const actionsPanel = document.querySelector('#actions-panel');
 const statusPill = document.querySelector('#status-pill');
 const summary = document.querySelector('#summary');
 const results = document.querySelector('#results');
 const emptyState = document.querySelector('#empty-state');
-const appVersion = document.querySelector('#app-version');
-const isPopup = document.body.classList.contains('popup-body');
-const searchView = isPopup ? 'popup' : 'history';
-const RESULT_PAGE_SIZE = isPopup ? 30 : 50;
-const TITLE_GROUP_PAGE_SIZE = 8;
+const RESULT_PAGE_SIZE = 30;
+const LINK_LIST_LIMIT = 50;
 let resultLimit = RESULT_PAGE_SIZE;
 let renderedConditions = '';
 let searchPending = false;
@@ -70,14 +68,15 @@ const groupRenameDialog = createGroupRenameDialog();
 const resultNavigation = createResultNavigation({
   queryInput, results,
   scrollContainer: document.querySelector('.popup-result-scroll') || document.scrollingElement || document.documentElement,
-  isBlocked: () => Boolean(document.querySelector('dialog[open], .select-combobox-button[aria-expanded="true"]'))
+  isBlocked: () => Boolean(document.querySelector('dialog[open], .select-combobox-button[aria-expanded="true"], .view-options-trigger[aria-expanded="true"]'))
+    || !actionsPanel?.hidden
 });
 let currentGroups = [];
 let sourceFilter = null;
 const sourceFilterBar = document.createElement('div');
 sourceFilterBar.className = 'source-filter-bar';
 sourceFilterBar.hidden = true;
-summary.before(sourceFilterBar);
+(document.querySelector('.popup-result-scroll') ?? summary).before(sourceFilterBar);
 let rangeDropdown = null;
 let sortDropdown = null;
 let pinnedUrlKeys = new Set();
@@ -85,12 +84,11 @@ let groupNameOverrides = new Map();
 let titleOverrides = new Map();
 let isInitialized = false;
 let showRenamedOnly = false;
-let sortOrder = isPopup ? 'default' : 'recent';
+let sortOrder = 'default';
 const editedDisplayPreferences = new Set();
 let pendingSearchPreferences = null;
 let searchSnapshot = null;
 let snapshotRenderTimer = null;
-const expandedTitleGroups = new Map();
 const searchState = createSearchState({
   loadIndex: () => historyIndexStore.loadRange('all'),
   ensureIndex: async () => {
@@ -109,7 +107,7 @@ const pageInitializer = createHistoryPageInitializer({
   initialSearch: { query: queryInput.value, range: rangeSelect.value },
   load: async () => {
     const [pinnedKeys, groupNames, titles, lastSearchState] = await Promise.all([
-      loadPinnedUrlKeys(), loadGroupNameOverrides(), loadTitleOverrides(), loadLastSearchState(searchView)
+      loadPinnedUrlKeys(), loadGroupNameOverrides(), loadTitleOverrides(), loadLastSearchState()
     ]);
     return { pinnedKeys, groupNames, titles, lastSearchState };
   },
@@ -119,8 +117,7 @@ const pageInitializer = createHistoryPageInitializer({
     titleOverrides = preferences.titles;
     if (!editedDisplayPreferences.has('renamed')) showRenamedOnly = Boolean(preferences.lastSearchState?.showRenamedOnly);
     if (!editedDisplayPreferences.has('sort')) {
-      const savedSort = normalizeSortOrder(preferences.lastSearchState?.sortOrder);
-      sortOrder = !isPopup && savedSort === 'default' ? 'recent' : savedSort;
+      sortOrder = normalizeSortOrder(preferences.lastSearchState?.sortOrder);
     }
     document.querySelector('#sort-order').value = sortOrder;
     sortDropdown.sync();
@@ -156,8 +153,6 @@ const liveSearch = createLiveSearch({
   }
 });
 
-const historyDayFormatter = new Intl.DateTimeFormat('zh-CN', { dateStyle: 'full' });
-const historyTimeFormatter = new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' });
 const currentYearDateFormatter = new Intl.DateTimeFormat('zh-CN', {
   month: 'long',
   day: 'numeric',
@@ -173,35 +168,11 @@ queryInput.addEventListener('compositionstart', () => liveSearch.compositionStar
 queryInput.addEventListener('compositionend', () => liveSearch.compositionEnd());
 rangeSelect.addEventListener('change', () => liveSearch.change());
 rangeDropdown = createSelectControl(rangeSelect, { label: '时间筛选' });
-const themeSelect = document.querySelector('#theme-color');
-if (themeSelect) {
-  const colors = ['blue', 'orange', 'green', 'neutral'];
-  try {
-    const saved = globalThis.localStorage?.getItem('history-ui-color');
-    if (colors.includes(saved)) themeSelect.value = saved;
-  } catch { /* Theme switching remains available when persistence is unavailable. */ }
-  document.documentElement.dataset.themeColor = themeSelect.value;
-  const themeControl = createSelectControl(themeSelect, { label: '主题' });
-  let themeEdited = false;
-  globalThis.chrome?.storage?.local?.get?.('history-ui-color', (saved) => {
-    if (themeEdited) return;
-    if (colors.includes(saved?.['history-ui-color'])) {
-      themeSelect.value = saved['history-ui-color'];
-      document.documentElement.dataset.themeColor = themeSelect.value;
-      themeControl.sync();
-    } else {
-      globalThis.chrome?.storage?.local?.set?.({ 'history-ui-color': themeSelect.value });
-    }
-  });
-  themeSelect.addEventListener('change', () => {
-    themeEdited = true;
-    document.documentElement.dataset.themeColor = themeSelect.value;
-    globalThis.chrome?.storage?.local?.set?.({ 'history-ui-color': themeSelect.value });
-    try { globalThis.localStorage?.setItem('history-ui-color', themeSelect.value); } catch { /* Keep the selected theme for this page. */ }
-  });
-}
-
+applySavedTheme(document, { watch: false });
 document.querySelector('#result-controls').append(createSortControl());
+initializeViewOptions();
+initializeRowActions();
+initializePrimaryKeyHint();
 renamedOnlyCheckbox.addEventListener('change', () => {
   showRenamedOnly = renamedOnlyCheckbox.checked;
   editedDisplayPreferences.add('renamed');
@@ -211,25 +182,232 @@ form.addEventListener('submit', (event) => {
   event.preventDefault();
   liveSearch.submit();
 });
-shortcutSettingsButton?.addEventListener('click', () => {
-  globalThis.chrome?.tabs?.create?.({ url: 'chrome://extensions/shortcuts' });
+openSettingsButton?.addEventListener('click', () => {
+  if (globalThis.chrome?.runtime?.openOptionsPage) globalThis.chrome.runtime.openOptionsPage();
+  else globalThis.chrome?.tabs?.create?.({ url: 'options.html' });
 });
 document.body.append(renameDialog.element);
 document.body.append(groupRenameDialog.element);
-renderRuntimeVersion();
-initializeUserDataControls(document);
 
 init();
 
-function renderRuntimeVersion() {
-  const version = globalThis.chrome?.runtime?.getManifest?.()?.version;
+// The filter panel only shapes the result list: renamed-only and sort.
+function initializeViewOptions() {
+  const trigger = document.querySelector('#view-options');
+  const panel = document.querySelector('#view-options-panel');
+  if (!trigger || !panel) return;
+  const setOpen = (open) => {
+    panel.hidden = !open;
+    trigger.setAttribute('aria-expanded', String(open));
+  };
+  trigger.addEventListener('click', () => setOpen(panel.hidden));
+  panel.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    event.preventDefault();
+    setOpen(false);
+    trigger.focus();
+  });
+  for (const type of ['click', 'focusin']) document.addEventListener(type, (event) => {
+    if (!panel.hidden && !panel.contains(event.target) && !trigger.contains(event.target)) setOpen(false);
+  });
+}
 
-  if (!appVersion || !version) {
-    return;
+// Row actions (⌘K / Ctrl+K, or right-click a row) act on one page, as in
+// Raycast's action panel. Same-title links live here instead of in the list.
+const rowEntries = new WeakMap();
+let lastFocusedResult = null;
+document.addEventListener('focusin', (event) => {
+  const row = event.target.closest?.('#results [data-navigation-key]');
+  if (row) lastFocusedResult = row;
+});
+
+function initializeRowActions() {
+  if (!actionsPanel) return;
+  const isMac = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '');
+  document.querySelectorAll('[data-mod-key]').forEach((key) => { key.textContent = isMac ? '⌘' : 'Ctrl'; });
+  const title = actionsPanel.querySelector('#actions-title');
+  const list = actionsPanel.querySelector('#actions-list');
+  const back = actionsPanel.querySelector('#actions-back');
+  let returnFocus = null;
+  let current = null;
+  let activeRow = null;
+
+  const close = ({ restoreFocus = true } = {}) => {
+    if (actionsPanel.hidden) return;
+    actionsPanel.hidden = true;
+    current = null;
+    activeRow?.classList.remove('result-item-actions-open');
+    activeRow = null;
+    if (restoreFocus) (returnFocus?.isConnected ? returnFocus : queryInput).focus();
+  };
+  const menuItem = (label, detail, run, { disabled = false } = {}) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'actions-item';
+    button.setAttribute('role', 'menuitem');
+    button.disabled = disabled;
+    const text = document.createElement('span');
+    text.className = 'actions-item-label';
+    text.textContent = label;
+    button.append(text);
+    if (detail) {
+      const extra = document.createElement('span');
+      extra.className = 'actions-item-detail';
+      extra.textContent = detail;
+      button.append(extra);
+    }
+    button.addEventListener('click', run);
+    return button;
+  };
+  // One item is active at a time, whether reached by arrow keys or the pointer.
+  const activate = (item) => {
+    if (!item) return;
+    list.querySelector('.is-active')?.classList.remove('is-active');
+    item.classList.add('is-active');
+    item.focus();
+  };
+  const show = (heading, items, { nested = false } = {}) => {
+    title.textContent = heading;
+    back.hidden = !nested;
+    list.replaceChildren(...items);
+    activate(list.querySelector('.actions-item:not(:disabled)'));
+  };
+  list.addEventListener('pointermove', (event) => {
+    const item = event.target.closest('.actions-item:not(:disabled)');
+    if (item && !item.classList.contains('is-active')) activate(item);
+  });
+  const openLink = (url) => {
+    close({ restoreFocus: false });
+    if (globalThis.chrome?.tabs?.create) globalThis.chrome.tabs.create({ url });
+    else globalThis.open?.(url, '_blank', 'noreferrer');
+  };
+  const showMain = () => {
+    const { item, groupKey, members } = current;
+    const label = groupNameOverrides.get(groupKey) || groupKey;
+    const others = members.length - 1;
+    show(item.title || item.url || '(无标题)', [
+      menuItem('打开', '↵', () => openLink(item.url)),
+      menuItem('复制链接', '', async () => {
+        close();
+        try {
+          await globalThis.navigator?.clipboard?.writeText(item.url);
+          setStatus('已复制链接');
+        } catch { setStatus('复制失败，请重试。', { error: true }); }
+      }),
+      menuItem('重命名网页…', '', () => { close({ restoreFocus: false }); renameItem(item); }),
+      menuItem(item.isPinned ? '取消固定' : '固定到顶部', '', () => { close(); togglePinnedItem(item); }),
+      ...(others > 0 ? [menuItem('同名的其他链接', String(others), showLinks)] : []),
+      menuItem('只看此来源', label, () => {
+        close({ restoreFocus: false });
+        sourceFilter = groupKey;
+        renderHistorySnapshot();
+        queryInput.focus();
+      }),
+      menuItem('修改来源名称…', '', () => {
+        close({ restoreFocus: false });
+        renameGroup({ key: groupKey, label, originalLabel: groupKey, isGroupRenamed: groupNameOverrides.has(groupKey) });
+      })
+    ]);
+  };
+  // Paths rarely mean anything to people; when each link was last visited does.
+  function showLinks() {
+    const { item, members } = current;
+    const links = members.filter((member) => member !== item).sort(compareHistoryItemsByRecency).slice(0, LINK_LIST_LIMIT);
+    show(`同名的其他链接（${members.length - 1}）`, links.map((link) => {
+      const button = menuItem(formatVisitTime(link.lastVisitTime), `${link.totalVisitCount ?? link.visitCount ?? 0} 次访问`,
+        () => openLink(link.url));
+      button.title = link.url;
+      button.addEventListener('keydown', (event) => {
+        if (event.key !== 'F2') return;
+        event.preventDefault();
+        close({ restoreFocus: false });
+        renameItem(link);
+      });
+      return button;
+    }), { nested: true });
   }
+  back.addEventListener('click', showMain);
 
-  appVersion.textContent = `v${version}`;
-  appVersion.title = `当前扩展版本 v${version}`;
+  const open = (row) => {
+    const entry = row && rowEntries.get(row);
+    if (!entry) return;
+    returnFocus = document.activeElement;
+    current = entry;
+    activeRow = row;
+    row.classList.add('result-item-actions-open');
+    actionsPanel.hidden = false;
+    showMain();
+  };
+  const targetRow = () => (lastFocusedResult?.isConnected && results.contains(lastFocusedResult)
+    ? lastFocusedResult : results.querySelector('[data-navigation-key]'));
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key?.toLowerCase() !== 'k' || !(isMac ? event.metaKey : event.ctrlKey)
+      || event.altKey || event.shiftKey || document.querySelector('dialog[open]')) return;
+    event.preventDefault();
+    if (actionsPanel.hidden) open(targetRow());
+    else close();
+  });
+  results.addEventListener('contextmenu', (event) => {
+    const row = event.target.closest('[data-navigation-key]');
+    if (!row || !rowEntries.has(row)) return;
+    event.preventDefault();
+    row.querySelector('a.result-title')?.focus();
+    open(row);
+  });
+  actionsPanel.addEventListener('keydown', (event) => {
+    const items = [...list.querySelectorAll('.actions-item:not(:disabled)')];
+    const index = items.indexOf(document.activeElement);
+    if (event.key === 'Escape' || (event.key === 'ArrowLeft' && !back.hidden)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (!back.hidden) showMain();
+      else close();
+    } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      const next = event.key === 'ArrowDown' ? index + 1 : index - 1;
+      activate(items[(next + items.length) % items.length]);
+    }
+  });
+  // Items replace the list on click, so a click's target may already be detached
+  // when it reaches the document; clicks inside the panel stop here instead.
+  actionsPanel.addEventListener('click', (event) => event.stopPropagation());
+  document.addEventListener('click', () => close({ restoreFocus: false }));
+  document.addEventListener('focusin', (event) => {
+    if (!actionsPanel.hidden && event.target.isConnected && !actionsPanel.contains(event.target)) close({ restoreFocus: false });
+  });
+}
+
+// The action bar names what the next key does: ↓ selects from the query,
+// ↵ opens once a result has focus.
+function initializePrimaryKeyHint() {
+  const hint = document.querySelector('#primary-key-hint');
+  if (!hint) return;
+  const [label, key] = hint.children;
+  const sync = () => {
+    const active = document.activeElement;
+    const onResult = Boolean(active?.matches?.('a.result-title') && results.contains(active));
+    label.textContent = onResult ? '打开' : '选择';
+    key.textContent = onResult ? '↵' : '↓';
+  };
+  for (const type of ['focusin', 'keyup', 'click']) document.addEventListener(type, sync);
+}
+
+// Launcher rows use fixed columns so every row lines up: title, source, one
+// state slot (renamed, pinned or the link count) and time.
+function arrangePopupRow(titleRow, meta, stateSlot) {
+  const host = meta.querySelector('.result-host');
+  if (host) meta.before(host);
+  const time = meta.querySelector('.result-time');
+  for (const state of titleRow.querySelectorAll('.result-state-icons, .result-custom-label')) stateSlot.append(state);
+  meta.before(stateSlot);
+  if (time) meta.prepend(time);
+}
+
+function createStateSlot() {
+  const slot = document.createElement('span');
+  slot.className = 'result-state';
+  return slot;
 }
 
 async function init() {
@@ -245,7 +423,6 @@ async function init() {
 }
 
 async function runSearch(query = queryInput.value, range = rangeSelect.value) {
-  expandedTitleGroups.clear();
   setLoading();
   void rememberCurrentSearchState({ query, range });
   try {
@@ -321,7 +498,7 @@ async function rememberCurrentSearchState(state = searchSnapshot) {
       range: state?.range ?? rangeSelect.value,
       showRenamedOnly,
       sortOrder
-    }, searchView);
+    });
   } catch {
     // Remembering the last search is helpful, but it should never block searching.
   }
@@ -345,28 +522,22 @@ function renderResults(groups) {
 
   emptyState.hidden = true;
   const groupKeys = new Map(groups.flatMap((group) => group.items.map((item) => [item, group.key])));
-  const compare = !isPopup && sortOrder === 'recent'
-    ? compareHistoryItemsByRecency : getHistoryItemComparator(sortOrder);
-  const items = [...groupKeys.keys()].sort(compare);
-  // The full history view shows each resource in its actual chronological slot.
-  const entries = isPopup ? groupItemsByDisplayTitle(items) : items.map((item) => ({ kind: 'item', item }));
+  const items = [...groupKeys.keys()].sort(getHistoryItemComparator(sortOrder));
+  const entries = groupItemsByDisplayTitle(items);
   const fragment = document.createDocumentFragment();
-  let lastDay = null;
+  // Sorted by recency, the list reads as a timeline: pins, today, yesterday, this week, then months.
+  let lastSection = null;
   for (const entry of entries.slice(0, resultLimit)) {
     const item = entry.item ?? entry.items[0];
-    if (!isPopup && sortOrder === 'recent') {
-      const date = new Date(Number(item.lastVisitTime ?? 0));
-      const day = Number(item.lastVisitTime) > 0 && Number.isFinite(date.getTime())
-        ? historyDayFormatter.format(date)
-        : '未知时间';
-      if (day !== lastDay) {
-        const divider = document.createElement('li');
-        divider.className = 'history-day';
-        const heading = document.createElement('h2');
-        heading.textContent = day;
-        divider.append(heading);
-        fragment.append(divider);
-        lastDay = day;
+    if (sortOrder === 'recent') {
+      const section = item.isPinned ? '已固定' : formatVisitSection(item.lastVisitTime);
+      if (section !== lastSection) {
+        const heading = document.createElement('li');
+        heading.className = 'result-section';
+        heading.setAttribute('role', 'presentation');
+        heading.textContent = section;
+        fragment.append(heading);
+        lastSection = section;
       }
     }
     const groupKey = groupKeys.get(item);
@@ -384,7 +555,7 @@ function renderResults(groups) {
       const oldLimit = resultLimit;
       resultLimit += RESULT_PAGE_SIZE;
       renderResults(groups);
-      [...results.children].filter((row) => !row.classList.contains('history-day'))[oldLimit]
+      [...results.children].filter((row) => !row.classList.contains('result-section'))[oldLimit]
         ?.querySelector('a.result-title')?.focus();
     });
     more.append(button);
@@ -394,95 +565,33 @@ function renderResults(groups) {
   resultNavigation.restore(navigationState);
 }
 
+function formatVisitSection(value, now = Date.now()) {
+  const time = Number(value);
+  if (!Number.isFinite(time) || time <= 0) return '更早';
+  const date = new Date(time);
+  const today = new Date(now);
+  const calendarDay = (day) => Date.UTC(day.getFullYear(), day.getMonth(), day.getDate());
+  const days = (calendarDay(today) - calendarDay(date)) / 86400000;
+  if (days <= 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 7) return '本周';
+  return date.getFullYear() === today.getFullYear()
+    ? `${date.getMonth() + 1} 月` : `${date.getFullYear()} 年 ${date.getMonth() + 1} 月`;
+}
+
+// Same-title links collapse into one row that opens the most visited link; the
+// others are reachable from the row's actions.
 function createTitleGroupItem(entry, groupKey) {
   const representative = entry.items.reduce((best, item) =>
     compareHistoryItemsByVisits(item, best) < 0 ? item : best);
-  const row = document.createElement('li');
-  row.className = 'title-group';
-  const details = document.createElement('details');
-  details.className = 'title-group-details';
-  details.open = expandedTitleGroups.has(entry.key);
-  details.addEventListener('toggle', () => {
-    if (!details.isConnected) return;
-    header.setAttribute('aria-expanded', String(details.open));
-    if (details.open) {
-      populateLinks();
-      expandedTitleGroups.set(entry.key, renderedCount);
-    } else expandedTitleGroups.delete(entry.key);
-  });
-  const header = document.createElement('summary');
-  header.className = 'result-item title-group-summary';
-  header.dataset.navigationKey = representative.dedupeKey || representative.url;
-  header.setAttribute('aria-label', `${entry.title}，展开或收起 ${entry.items.length} 个同名链接`);
-  header.setAttribute('aria-expanded', String(details.open));
-  const content = document.createElement('div');
-  content.className = 'result-content';
-  const title = document.createElement('a');
-  title.className = 'result-title';
-  appendHighlightedText(title, entry.title, entry.items[0].searchMatch?.titleRanges);
-  title.href = representative.url;
-  title.target = '_blank';
-  title.rel = 'noreferrer';
-  title.title = `${entry.title}\n打开访问最多的链接：${representative.url}`;
-  title.addEventListener('click', (event) => event.stopPropagation());
-  content.append(title, createResultMeta(entry, { groupKey }));
-  appendMatchReason(content, entry.items[0]);
-  const count = document.createElement('span');
-  count.className = 'title-group-count';
-  count.textContent = `${entry.items.length} 个链接`;
-  count.title = '展开或收起其他链接';
-  const controls = document.createElement('div');
-  controls.className = 'title-group-tools';
-  const actions = document.createElement('div');
-  actions.className = 'result-actions';
-  actions.append(createRenameButton(representative), createPinButton(representative));
-  actions.addEventListener('click', (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-  });
-  controls.append(actions, count);
-  header.append(content, controls);
-  const list = document.createElement('ol');
-  list.className = 'title-group-list';
-  let items;
-  let choices;
-  let renderedCount = 0;
-  const more = document.createElement('li');
-  more.className = 'results-more';
-  const moreButton = document.createElement('button');
-  moreButton.className = 'secondary-button';
-  moreButton.type = 'button';
-  more.append(moreButton);
-
-  // A collapsed group can contain thousands of links. Defer both labels and
-  // DOM creation until expansion, then append bounded pages without rebuilding.
-  function populateLinks(limit = expandedTitleGroups.get(entry.key) || TITLE_GROUP_PAGE_SIZE) {
-    items ??= [...entry.items].sort(sortOrder === 'default'
-      ? compareHistoryItemsByVisits : getHistoryItemComparator(sortOrder));
-    choices ??= describeLinkChoices(items, { groupTitle: entry.title });
-    more.remove();
-    const fragment = document.createDocumentFragment();
-    const end = Math.min(limit, items.length);
-    for (; renderedCount < end; renderedCount += 1) {
-      const index = renderedCount;
-      fragment.append(createResultItem(items[index], groupKey, { choice: choices[index] }));
-    }
-    list.append(fragment);
-    if (renderedCount < items.length) {
-      moreButton.textContent = `显示更多链接（剩余 ${items.length - renderedCount} 个）`;
-      list.append(more);
-    }
-
-  }
-  moreButton.addEventListener('click', () => {
-    const oldCount = renderedCount;
-    populateLinks(renderedCount + TITLE_GROUP_PAGE_SIZE);
-    expandedTitleGroups.set(entry.key, renderedCount);
-    list.children[oldCount]?.querySelector('a')?.focus();
-  });
-  details.append(header, list);
-  if (details.open) populateLinks();
-  row.append(details);
+  const row = createResultItem({
+    ...representative,
+    title: entry.title,
+    searchMatch: entry.items[0].searchMatch,
+    totalVisitCount: entry.totalVisitCount,
+    lastVisitTime: entry.lastVisitTime
+  }, groupKey, { members: entry.items, opens: representative });
+  row.classList.add('title-group');
   return row;
 }
 
@@ -500,22 +609,11 @@ function createGroupRenameDialog() {
   });
 }
 
-function createResultItem(item, groupKey, { distinguishUrl = false, choice = null } = {}) {
-  const variant = Boolean(choice);
+function createResultItem(item, groupKey, { distinguishUrl = false, members = [item], opens = item } = {}) {
   const row = document.createElement('li');
-  row.className = variant ? 'result-item result-variant' : 'result-item';
-  row.dataset.navigationKey = item.dedupeKey || item.url;
-  if (!isPopup) {
-    row.classList.add('history-result');
-    const time = document.createElement('time');
-    time.className = 'history-visit-time';
-    const date = new Date(Number(item.lastVisitTime ?? 0));
-    const valid = Number(item.lastVisitTime) > 0 && Number.isFinite(date.getTime());
-    time.textContent = valid ? historyTimeFormatter.format(date) : '—';
-    time.title = valid ? formatVisitTime(item.lastVisitTime) : '未知时间';
-    if (valid) time.setAttribute('datetime', date.toISOString());
-    row.append(time);
-  }
+  row.className = 'result-item';
+  row.dataset.navigationKey = opens.dedupeKey || opens.url;
+  rowEntries.set(row, { item: opens, groupKey, members });
   if (item.isPinned) {
     row.classList.add('result-item-pinned');
   }
@@ -526,31 +624,14 @@ function createResultItem(item, groupKey, { distinguishUrl = false, choice = nul
   const content = document.createElement('div');
   content.className = 'result-content';
 
-  const actions = document.createElement('div');
-  actions.className = 'result-actions';
-
   const title = document.createElement('a');
-  title.className = variant ? `result-title result-variant-link${choice.isPageTitle ? ' has-page-title' : ''}` : 'result-title';
-  title.href = item.url;
+  title.className = 'result-title';
+  title.href = opens.url;
   title.target = '_blank';
   title.rel = 'noreferrer';
-  title.title = item.url || '';
-  if (variant) {
-    const label = document.createElement('span');
-    label.className = 'result-choice-label';
-    label.textContent = choice.label;
-    title.append(label);
-    if (choice.secondary) {
-      const context = document.createElement('span');
-      context.className = 'result-choice-context';
-      context.textContent = choice.secondary;
-      title.append(context);
-    }
-    title.setAttribute('aria-label', `${choice.label}${choice.secondary}，打开链接：${item.url}`);
-  } else {
-    appendHighlightedText(title, item.title || item.url || '(无标题)', item.searchMatch?.titleRanges);
-    if (item.title && item.title !== item.url) title.title = `${item.title}\n${item.url || ''}`;
-  }
+  appendHighlightedText(title, item.title || item.url || '(无标题)', item.searchMatch?.titleRanges);
+  title.title = item.title && item.title !== opens.url ? `${item.title}\n${opens.url || ''}` : opens.url || '';
+  if (members.length > 1) title.title += `\n另有 ${members.length - 1} 个同名链接，按 ⌘K 查看`;
 
   if (item.isPinned) {
     const states = document.createElement('span');
@@ -562,36 +643,22 @@ function createResultItem(item, groupKey, { distinguishUrl = false, choice = nul
   if (item.isTitleRenamed) {
     const label = document.createElement('span');
     label.className = 'result-custom-label';
-    label.textContent = isPopup ? '已命名' : '自定义';
+    label.textContent = '已命名';
     label.title = '当前显示的是自定义网页名';
     titleRow.append(label);
   }
-  actions.append(createRenameButton(item), createPinButton(item));
 
   content.append(titleRow);
-  if (!variant) appendMatchReason(content, item);
-  if (!variant) {
-    const url = document.createElement('div');
-    url.className = distinguishUrl ? 'result-url result-url-required' : 'result-url';
-    url.title = item.url || '';
-    url.textContent = distinguishUrl ? item.url : formatHistoryUrlForGroup(item, groupKey);
-    content.append(url);
-  }
-  if (!variant) {
-    content.append(createResultMeta(item, { groupKey }));
-  }
+  appendMatchReason(title, item);
+  const url = document.createElement('div');
+  url.className = distinguishUrl ? 'result-url result-url-required' : 'result-url';
+  url.title = opens.url || '';
+  url.textContent = distinguishUrl ? opens.url : formatHistoryUrlForGroup(opens, groupKey);
+  content.append(url);
+  const meta = createResultMeta(item, { groupKey });
+  content.append(meta);
+  arrangePopupRow(titleRow, meta, createStateSlot());
   row.append(content);
-  if (variant) {
-    const stats = document.createElement('div');
-    stats.className = 'result-variant-stats';
-    const visits = document.createElement('span');
-    visits.className = 'result-variant-visits';
-    visits.textContent = `${item.totalVisitCount ?? item.visitCount ?? 0} 次访问`;
-    visits.title = '累计访问次数';
-    stats.append(visits);
-    row.append(stats);
-  }
-  row.append(actions);
   return row;
 }
 
@@ -608,18 +675,12 @@ function appendHighlightedText(element, text, ranges = []) {
   element.append(document.createTextNode(text.slice(offset)));
 }
 
-function appendMatchReason(content, item) {
+// Old names still match the search; they stay out of the row and appear only in
+// the title tooltip so every result keeps to one line.
+function appendMatchReason(title, item) {
   const aliases = item.searchMatch?.aliases ?? [];
   if (!aliases.length) return;
-  const reason = document.createElement('div');
-  reason.className = 'result-match';
-  reason.title = aliases.map((alias) => alias.text).join('；');
-  reason.append(document.createTextNode('曾用名：'));
-  aliases.forEach((alias, index) => {
-    if (index) reason.append(document.createTextNode('；'));
-    appendHighlightedText(reason, alias.text, alias.ranges);
-  });
-  content.append(reason);
+  title.title = `${title.title}\n曾用名：${aliases.map((alias) => alias.text).join('；')}`;
 }
 
 function renderSourceFilter() {
@@ -646,7 +707,6 @@ function renderSourceFilter() {
   clear.title = '清除来源筛选';
   clear.addEventListener('click', () => {
     sourceFilter = null;
-    expandedTitleGroups.clear();
     renderHistorySnapshot();
     queryInput.focus();
   });
@@ -662,6 +722,7 @@ function createResultHost(groupKey, pageUrl) {
   for (const character of groupKey) hash = (Math.imul(hash, 31) + character.codePointAt(0)) >>> 0;
   host.dataset.sourceTone = String(hash % 6);
   host.dataset.groupKey = groupKey;
+  host.dataset.initial = [...label.replace(/^www\./, '')][0]?.toUpperCase() ?? '';
   host.title = label === groupKey ? groupKey : `${label}（${groupKey}）`;
   host.type = 'button';
   host.title += ' · 点击筛选，右键修改分组名';
@@ -670,7 +731,6 @@ function createResultHost(groupKey, pageUrl) {
     event.preventDefault();
     event.stopPropagation();
     sourceFilter = groupKey;
-    expandedTitleGroups.clear();
     renderHistorySnapshot();
     sourceFilterBar.querySelector('button')?.focus();
   });
@@ -713,35 +773,14 @@ function createResultMeta(item, { groupKey = null } = {}) {
   meta.className = 'result-meta';
   const visitCount = item.totalVisitCount ?? item.visitCount ?? 0;
   if (groupKey) meta.append(createResultHost(groupKey, item.url || item.items?.[0]?.url));
-  if (!isPopup && sortOrder !== 'recent') meta.append(createTag(formatVisitTime(item.lastVisitTime)));
-  meta.append(createTag(`${visitCount} 次访问`));
-  if (isPopup) {
-    const time = createTag(formatRelativeVisitTime(item.lastVisitTime));
-    time.title = formatVisitTime(item.lastVisitTime);
-    meta.append(time);
-  }
-  if (item.isTitleRenamed && searchSnapshot?.range !== 'all' &&
-    Number(item.lastVisitTime ?? 0) < searchSnapshot?.rangeStartTime) {
-    const note = createTag('跨时间保留');
-    note.classList.add('retained-note');
-    note.title = '已命名页面不受时间筛选限制';
-    meta.append(note);
-  }
+  const visits = createTag(`${visitCount} 次访问`);
+  visits.classList.add('result-visits');
+  meta.append(visits);
+  const time = createTag(formatRelativeVisitTime(item.lastVisitTime));
+  time.classList.add('result-time');
+  time.title = `${formatVisitTime(item.lastVisitTime)} · ${visitCount} 次访问`;
+  meta.append(time);
   return meta;
-}
-
-function createRenameButton(item) {
-  const button = document.createElement('button');
-  button.className = 'item-action-button rename-button';
-  button.type = 'button';
-  button.title = '修改网页名';
-  button.setAttribute('aria-label', '修改网页名');
-  button.append(createEditIcon());
-  button.addEventListener('click', () => {
-    renameItem(item);
-  });
-
-  return button;
 }
 
 function createRenameDialog() {
@@ -864,41 +903,6 @@ function createRenameDialogShell({
   };
 }
 
-function createPinButton(item) {
-  const label = getPinButtonLabel(item);
-  const button = document.createElement('button');
-  button.className = 'item-action-button pin-button';
-  button.type = 'button';
-  button.title = label;
-  button.setAttribute('aria-pressed', String(Boolean(item.isPinned)));
-  button.setAttribute('aria-label', label);
-  button.append(createPinIcon());
-  button.addEventListener('click', () => {
-    togglePinnedItem(item);
-  });
-
-  return button;
-}
-
-function getPinButtonLabel(item) {
-  return item.isPinned ? '取消置顶此网页' : '置顶此网页';
-}
-
-function createEditIcon() {
-  const icon = createBaseIcon();
-
-  for (const pathData of [
-    'M12 20h9',
-    'M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z'
-  ]) {
-    const path = document.createElementNS(SVG_NAMESPACE, 'path');
-    path.setAttribute('d', pathData);
-    icon.append(path);
-  }
-
-  return icon;
-}
-
 function createPinIcon() {
   const icon = createBaseIcon();
 
@@ -936,7 +940,7 @@ function createSortControl() {
   select.id = 'sort-order';
   select.setAttribute('aria-label', '排序方式');
   for (const [value, text] of [
-    ...(isPopup ? [['default', '综合排序']] : []),
+    ['default', '综合排序'],
     ['visits', '访问最多'],
     ['recent', '最近访问'],
     ['name', '名称升序']
@@ -950,7 +954,6 @@ function createSortControl() {
   select.addEventListener('change', () => {
     sortOrder = normalizeSortOrder(select.value);
     editedDisplayPreferences.add('sort');
-    expandedTitleGroups.clear();
     renderHistorySnapshot();
     void rememberCurrentSearchState();
   });
@@ -1202,6 +1205,8 @@ function addStorageChangeListener() {
       );
       scheduleSnapshotRender();
     }
+
+    if (changes[THEME_STORAGE_KEY]) applyTheme(document, changes[THEME_STORAGE_KEY].newValue);
 
     if (changes[TITLE_OVERRIDES_STORAGE_KEY]) {
       titleOverrides = normalizePageTitleOverrideMap(

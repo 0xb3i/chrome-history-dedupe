@@ -18,6 +18,11 @@ test('release requires CSS :has support and excludes incognito sessions', () => 
   assert.equal(manifest.incognito, 'not_allowed');
 });
 
+test('the extension no longer replaces chrome://history and exposes settings as an options page', () => {
+  assert.equal(manifest.chrome_url_overrides, undefined);
+  assert.deepEqual(manifest.options_ui, { page: 'options.html', open_in_tab: true });
+});
+
 test('browser action opens the popup page', () => {
   assert.equal(manifest.action.default_popup, 'popup.html');
 });
