@@ -1,0 +1,74 @@
+{
+  "schemaVersion": 1,
+  "project": "历史记录去重搜索 · 快捷键弹窗",
+  "brief": "按快捷键打开弹窗，输入“设计”，快速认出并打开目标页面；同一份结果（今天 / 昨天 / 本周），在 Raycast / macOS 浅色风格内比较三种骨架。",
+  "round": "01",
+  "candidates": [
+    {
+      "id": "a-spotlight",
+      "name": "聚光灯单列",
+      "concept": "只看一行标题就能认出页面：每行 40px 单行，其余信息退成右侧浅灰附属字。",
+      "typography": "系统字体 / PingFang SC；搜索 18px，标题 14px，来源与时间 12px 浅灰，分组 12px 半粗",
+      "palette": [
+        "#fbfbfb",
+        "#1d1d1f",
+        "#9c9ca1",
+        "#ffe58a",
+        "#ff5f57"
+      ],
+      "traits": [
+        "无边框搜索，右侧只留一个时间下拉",
+        "实心浅灰选中行，无蓝色高亮",
+        "命中词用 macOS 查找黄",
+        "底部操作栏：打开 ↵ ｜ 操作 ⌘K"
+      ],
+      "nativeViewport": "580x560",
+      "source": "a-spotlight/index.html",
+      "interactive": true
+    },
+    {
+      "id": "b-detail",
+      "name": "列表 + 详情",
+      "concept": "左边挑，右边确认：列表只放标题，选中页的来源、次数、时间和同页链接都在详情里。",
+      "typography": "系统字体 / PingFang SC；搜索 17px，列表 14px，详情标题 17px 半粗，信息表 13px",
+      "palette": [
+        "#f9f9fa",
+        "#ffffff",
+        "#1c1c1e",
+        "#6c6c70",
+        "#a259ff"
+      ],
+      "traits": [
+        "720px 宽，左列 300px",
+        "详情顶部取网站图标色做极淡底",
+        "同页链接在详情里展开，不占列表",
+        "命中词加粗下划线"
+      ],
+      "nativeViewport": "720x560",
+      "source": "b-detail/index.html",
+      "interactive": true
+    },
+    {
+      "id": "c-native",
+      "name": "原生列表视图",
+      "concept": "像 Finder 一样可扫读和比较：表头列、斑马纹、系统蓝实心选中，信息一眼对齐。",
+      "typography": "系统字体 / PingFang SC；搜索 15px，表格 13px，表头与分组 12px",
+      "palette": [
+        "#ececec",
+        "#ffffff",
+        "#f5f5f7",
+        "#0a64d8",
+        "#1d1d1f"
+      ],
+      "traits": [
+        "统一工具栏 + 圆角灰底搜索框",
+        "时间分段控件 + 仅已命名开关",
+        "名称 / 来源 / 访问 / 时间四列",
+        "底部状态栏显示合并数量"
+      ],
+      "nativeViewport": "580x560",
+      "source": "c-native/index.html",
+      "interactive": true
+    }
+  ]
+}

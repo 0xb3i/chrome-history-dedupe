@@ -2,3 +2,7 @@
 node_modules/
 dist/
 coverage/
+
+# 本机预览配置与自动截图报告
+/.claude/launch.json
+/designs/**/report.json

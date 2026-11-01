@@ -17,7 +17,7 @@
 喵迹是一款 Chrome 历史记录搜索扩展。按下快捷键，用记得的标题或曾用名找回页面，自动归并重复链接，也能给常用页面改名、固定。
 
 <p align="center">
-  <img src="docs/images/search.png" width="680" alt="喵迹功能总览：重命名标签、固定图钉、时间分组、尾随来源和关键词高亮">
+  <img src="docs/images/feature-overview.png" width="680" alt="喵迹功能总览：重命名标签、固定图钉、时间分组、尾随来源和关键词高亮">
 </p>
 <p align="center"><sub>使用示例数据展示已重命名、已固定、时间分组、来源标签与关键词高亮。</sub></p>
 
@@ -35,7 +35,7 @@
 选中结果后按 ⌘K / Ctrl+K，或右键点击结果。
 
 <p align="center">
-  <img src="docs/images/actions.png" width="680" alt="使用同一组示例数据展示操作面板，可重命名、固定、查看同名链接和筛选来源">
+  <img src="docs/images/page-actions.png" width="680" alt="使用同一组示例数据展示操作面板，可重命名、固定、查看同名链接和筛选来源">
 </p>
 
 </details>

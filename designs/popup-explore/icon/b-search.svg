@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e9edf3"/>
+    </linearGradient>
+    <linearGradient id="lens" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3b8cff"/>
+      <stop offset="1" stop-color="#0a5ce0"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="120" height="120" rx="27" fill="url(#bg)"/>
+  <rect x="4.5" y="4.5" width="119" height="119" rx="26.5" fill="none" stroke="#000" stroke-opacity=".1"/>
+  <rect x="24" y="30" width="58" height="9" rx="4.5" fill="#c7cdd6"/>
+  <rect x="24" y="48" width="44" height="9" rx="4.5" fill="#c7cdd6"/>
+  <rect x="24" y="66" width="30" height="9" rx="4.5" fill="#c7cdd6"/>
+  <circle cx="78" cy="76" r="22" fill="#fff" stroke="url(#lens)" stroke-width="9"/>
+  <path d="M78 66v10l7 5" fill="none" stroke="#0a5ce0" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M94 92l12 12" stroke="url(#lens)" stroke-width="11" stroke-linecap="round"/>
+</svg>
