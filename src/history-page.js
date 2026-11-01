@@ -301,7 +301,7 @@ function initializeRowActions() {
           setStatus('已复制链接');
         } catch { setStatus('复制失败，请重试。', { error: true }); }
       }),
-      menuItem('重命名网页…', '', () => { close({ restoreFocus: false }); renameItem(item); }),
+      menuItem('重命名网页', '', () => { close({ restoreFocus: false }); renameItem(item); }),
       menuItem(item.isPinned ? '取消固定' : '固定到顶部', '', () => { close(); togglePinnedItem(item); }),
       ...(others > 0 ? [menuItem('同名的其他链接', String(others), showLinks)] : []),
       menuItem('只看此来源', label, () => {
@@ -310,7 +310,7 @@ function initializeRowActions() {
         renderHistorySnapshot();
         queryInput.focus();
       }),
-      menuItem('修改来源名称…', '', () => {
+      menuItem('修改来源名称', '', () => {
         close({ restoreFocus: false });
         renameGroup({ key: groupKey, label, originalLabel: groupKey, isGroupRenamed: groupNameOverrides.has(groupKey) });
       })
@@ -1102,7 +1102,7 @@ function setRenamePending(dialog, pending) {
     getRenameDialogInputValue(dialog) === dialog.element.dataset.initialName;
   dialog.restoreButton.disabled = pending || !dialog.canRestore;
   dialog.restoreButton.hidden = !dialog.canRestore;
-  dialog.saveButton.textContent = pending ? '处理中…' : '保存';
+  dialog.saveButton.textContent = pending ? '处理中' : '保存';
   if (pending) dialog.status.textContent = '正在保存更改…';
 }
 

@@ -119,7 +119,7 @@ test('search clear control uses the flat Ant allowClear affordance', () => {
 
 test('row actions live in the ⌘K panel rather than as buttons on each row', () => {
   assert.doesNotMatch(historyPageJs, /item-action-button/);
-  for (const label of ['打开', '复制链接', '重命名网页…', '只看此来源', '修改来源名称…', '同名的其他链接']) {
+  for (const label of ['打开', '复制链接', '重命名网页', '只看此来源', '修改来源名称', '同名的其他链接']) {
     assert.ok(historyPageJs.includes(`'${label}'`), label);
   }
   assert.ok(css.includes('.rename-filter input:checked'));

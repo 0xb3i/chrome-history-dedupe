@@ -493,14 +493,14 @@ test('⌘K and right-click open the focused row\'s actions: open, copy, rename, 
   const labels = page.openActions(second).map((item) => item.querySelector('.actions-item-label').textContent);
   assert.equal(panel.hidden, false);
   assert.equal(page.one('#actions-title').textContent, '乙文档');
-  assert.deepEqual(labels, ['打开', '复制链接', '重命名网页…', '固定到顶部', '只看此来源', '修改来源名称…']);
+  assert.deepEqual(labels, ['打开', '复制链接', '重命名网页', '固定到顶部', '只看此来源', '修改来源名称']);
   assert.equal(page.document.activeElement, page.action('打开'));
   page.fire(panel, 'keydown', { key: 'Escape' });
   assert.equal(panel.hidden, true);
   assert.equal(page.document.activeElement, second.querySelector('a.result-title'));
 
   page.openActions(second);
-  page.action('修改来源名称…').click();
+  page.action('修改来源名称').click();
   const dialog = page.one('dialog[open]');
   assert.equal(dialog.querySelector('h2').textContent, '修改分组名');
   assert.equal(dialog.querySelector('input').value, 'docs.example.org');
@@ -508,7 +508,7 @@ test('⌘K and right-click open the focused row\'s actions: open, copy, rename, 
 
   page.fire(second, 'contextmenu');
   assert.equal(panel.hidden, false);
-  page.action('重命名网页…').click();
+  page.action('重命名网页').click();
   assert.equal(page.one('dialog[open]').getAttribute('aria-label'), '重命名网页');
   assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, items[1].url);
   page.button('取消', page.one('dialog[open]')).click();
@@ -580,7 +580,7 @@ test('result navigation joins the page, preserves refresh focus, and leaves rena
   page.fire(page.document.activeElement, 'keydown', { key: 'Escape' });
   assert.equal(page.document.activeElement, query);
   page.openActions(page.one('.popup-results .result-item'));
-  page.action('重命名网页…').click();
+  page.action('重命名网页').click();
   const dialog = page.one('dialog[open]');
   assert.equal(dialog.getAttribute('aria-label'), '重命名网页');
   assert.deepEqual([...dialog.querySelector('.rename-primary-actions').children].map((button) => button.textContent),

@@ -242,7 +242,7 @@
     for (const control of panel.querySelectorAll('input, button')) {
       control.disabled = isPending;
     }
-    panel.querySelector('[data-save-action]').textContent = isPending ? '处理中…' : '保存';
+    panel.querySelector('[data-save-action]').textContent = isPending ? '处理中' : '保存';
 
     if (!isPending) {
       const restoreButton = panel.querySelector('[data-restore-available]');

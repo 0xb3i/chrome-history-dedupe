@@ -139,7 +139,7 @@ function setPending(isPending) {
   form.querySelector('button[type="submit"]').disabled = isPending || !currentDraft ||
     !titleInput.value.trim() || titleInput.value.trim().replace(/\s+/g, ' ') ===
     String(currentDraft.currentTitle ?? '').trim().replace(/\s+/g, ' ');
-  form.querySelector('button[type="submit"]').textContent = isPending ? '处理中…' : '保存';
+  form.querySelector('button[type="submit"]').textContent = isPending ? '处理中' : '保存';
 
   if (isPending) {
     setError('');
