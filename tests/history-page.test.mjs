@@ -94,7 +94,7 @@ async function createPage({ file = 'popup.html', items = [], titles = new Map(),
         onMessage: { addListener: (listener) => listeners.runtime.push(listener) },
         openOptionsPage: () => optionsOpened.push(true) },
       storage: { onChanged: { addListener: (listener) => listeners.storage.push(listener) } },
-      tabs: { create: ({ url }) => tabsCreated.push(url) }
+      tabs: { create: ({ url }, callback) => { tabsCreated.push(url); callback?.(); } }
     }
   });
   vm.runInContext(executable, context, { filename: pageUrl.pathname });
@@ -446,7 +446,7 @@ test('the filter panel only holds result filters and a settings link', async () 
   assert.equal(panel.hidden, true);
   assert.equal(page.document.activeElement, trigger);
   page.one('#open-settings').click();
-  assert.deepEqual(page.optionsOpened, [true]);
+  assert.deepEqual(page.tabsCreated, ['chrome-extension://test-extension/options.html']);
 });
 
 test('popup rows have no inline buttons and lay out title, source, state and time columns', async () => {

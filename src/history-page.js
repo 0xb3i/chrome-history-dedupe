@@ -182,9 +182,12 @@ form.addEventListener('submit', (event) => {
   event.preventDefault();
   liveSearch.submit();
 });
+// Open the options page as a tab, then close the popup; openOptionsPage can be
+// dropped when the popup closes before Chrome handles it.
 openSettingsButton?.addEventListener('click', () => {
-  if (globalThis.chrome?.runtime?.openOptionsPage) globalThis.chrome.runtime.openOptionsPage();
-  else globalThis.chrome?.tabs?.create?.({ url: 'options.html' });
+  const url = globalThis.chrome?.runtime?.getURL?.('options.html') ?? 'options.html';
+  if (globalThis.chrome?.tabs?.create) globalThis.chrome.tabs.create({ url }, () => globalThis.close?.());
+  else globalThis.chrome?.runtime?.openOptionsPage?.();
 });
 document.body.append(renameDialog.element);
 document.body.append(groupRenameDialog.element);

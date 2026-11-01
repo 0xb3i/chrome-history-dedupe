@@ -59,7 +59,7 @@ test('popup is a launcher: search row, single-line results and a keyed action ba
   assert.match(popupHtml, /<kbd data-mod-key>/);
   assert.match(css, /\.popup-body \.popup-results \.result-item \.result-title,[^{]*\{[^}]*white-space: nowrap;/);
   assert.match(css, /\.actions-panel \{[^}]*position: absolute;/);
-  assert.match(css, /\.popup-body \.rename-dialog-actions \.primary-button::after \{[^}]*content: "↵";/);
+  assert.match(css, /\.popup-body \.rename-dialog-actions \.primary-button \{[^}]*background: var\(--accent\);/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*\.view-options-panel/);
 });
 

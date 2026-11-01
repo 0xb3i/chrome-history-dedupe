@@ -2477,10 +2477,6 @@ input {
   margin-right: 2px;
 }
 
-.popup-body .launcher-footer .key-hint:first-of-type .key-hint-label {
-  color: var(--pop-text);
-  font-weight: 500;
-}
 
 .key-hint-divider {
   width: 1px;
@@ -2551,7 +2547,7 @@ input {
 
 .popup-body .rename-dialog-header {
   gap: 2px;
-  padding: 16px 18px 12px;
+  padding: 18px 18px 12px;
 }
 
 .popup-body .rename-dialog-header h2 {
@@ -2569,7 +2565,7 @@ input {
 
 .popup-body .rename-dialog-form > .field {
   margin: 0;
-  padding: 0 18px 16px;
+  padding: 0 18px 18px;
 }
 
 .popup-body .rename-dialog-form > .field > span {
@@ -2612,58 +2608,49 @@ input {
   font-size: 12px;
 }
 
+/* Buttons sit on the sheet itself, macOS-alert style: one shape for every
+   button, the default one filled with the accent, restore apart on the left. */
 .popup-body .rename-dialog-actions {
-  gap: 6px;
+  gap: 8px;
   margin: 0;
-  padding: 8px 10px 8px 12px;
-  border-top: 1px solid var(--pop-hairline);
-  background: rgba(0, 0, 0, 0.018);
+  padding: 0 18px 16px;
+  border: 0;
+  background: transparent;
 }
 
 .popup-body .rename-dialog-actions .rename-primary-actions {
-  gap: 6px;
+  gap: 8px;
 }
 
-/* Restore is a quiet text action; it only matters for renamed pages. */
-.popup-body .rename-dialog-actions .rename-restore,
-.popup-body .rename-dialog-actions .rename-restore:hover {
-  padding: 0 8px;
-  background: transparent;
-  box-shadow: none;
-  color: var(--pop-secondary);
-  font-weight: 400;
-}
-
-.popup-body .rename-dialog-actions .rename-restore:hover:not(:disabled) {
-  background: var(--pop-fill);
-  color: var(--pop-text);
-}
-
-.popup-body .rename-dialog-actions .rename-restore:disabled {
-  opacity: 0.45;
-}
-
-.popup-body .rename-dialog-actions .secondary-button:not(.rename-restore),
-.popup-body .rename-dialog-actions .primary-button {
-  gap: 7px;
-  padding: 0 6px 0 11px;
-}
-
-.popup-body .rename-dialog-actions .secondary-button:not(.rename-restore) {
-  background: transparent;
-  box-shadow: none;
-  color: var(--pop-text);
-}
-
-.popup-body .rename-dialog-actions .secondary-button:not(.rename-restore):hover {
-  background: var(--pop-fill);
-  box-shadow: none;
-}
-
-.popup-body .rename-dialog-actions .primary-button {
+.popup-body .rename-dialog-actions :is(.secondary-button, .primary-button) {
+  min-width: 72px;
+  min-height: 28px;
+  padding: 0 14px;
   border: 0;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.popup-body .rename-dialog-actions .secondary-button {
+  background: #fff;
+  box-shadow: var(--pop-control-shadow);
+  color: var(--pop-text);
+}
+
+.popup-body .rename-dialog-actions .secondary-button:hover:not(:disabled) {
+  background: #fff;
+  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.24), 0 1px 2px rgba(0, 0, 0, 0.08);
+  color: var(--pop-text);
+}
+
+.popup-body .rename-dialog-actions .secondary-button:active:not(:disabled) {
+  background: #f2f2f4;
+}
+
+.popup-body .rename-dialog-actions .primary-button {
   background: var(--accent);
-  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.2), 0 1px 1.5px rgba(0, 0, 0, 0.12);
+  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 1px 1.5px rgba(0, 0, 0, 0.12);
   color: #fff;
 }
 
@@ -2672,31 +2659,13 @@ input {
   filter: brightness(1.06);
 }
 
-.popup-body .rename-dialog-actions .primary-button:disabled {
-  opacity: 0.45;
+.popup-body .rename-dialog-actions .primary-button:active:not(:disabled) {
+  filter: brightness(0.94);
+}
+
+.popup-body .rename-dialog-actions :is(.secondary-button, .primary-button):disabled {
+  opacity: 0.4;
   filter: none;
-}
-
-.popup-body .rename-dialog-actions :is(.secondary-button:not(.rename-restore), .primary-button)::after {
-  display: inline-grid;
-  place-items: center;
-  min-width: 20px;
-  height: 18px;
-  padding: 0 4px;
-  border-radius: 4px;
-  font: 500 11px/1 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-}
-
-.popup-body .rename-dialog-actions .secondary-button:not(.rename-restore)::after {
-  background: var(--pop-fill);
-  color: var(--pop-secondary);
-  content: "esc";
-}
-
-.popup-body .rename-dialog-actions .primary-button::after {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
-  content: "↵";
 }
 
 .popup-body .rename-dialog-actions :is(button):focus-visible {
