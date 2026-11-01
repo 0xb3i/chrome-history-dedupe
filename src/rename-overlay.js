@@ -45,7 +45,7 @@
 
     const url = document.createElement('p');
     url.className = 'target-url';
-    url.textContent = draft.sourceLabel;
+    url.textContent = draft.url;
     url.title = draft.url;
 
     const field = document.createElement('label');

@@ -5,7 +5,6 @@ import {
   formatHistoryUrlForGroup,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
-  getHistoryItemSourceLabel,
   groupHistoryItems,
   getHistoryItemComparator,
   normalizeSortOrder
@@ -1103,7 +1102,7 @@ function createRecoveryButton(label, action) {
 function renameItem(item) {
   renameSession.open(item);
   renameDialog.input.value = item.title || item.url || '';
-  renameDialog.url.textContent = getHistoryItemSourceLabel(item);
+  renameDialog.url.textContent = item.url || '';
   renameDialog.url.title = item.url || '';
   renameDialog.status.textContent = '';
   renameDialog.canRestore = Boolean(item.isTitleRenamed);

@@ -74,5 +74,4 @@ test('background excludes incognito capture and rename without breaking normal t
   await settle();
   assert.equal(injections, 1);
   assert.equal(messages[0].draft.url, regular.url);
-  assert.equal(messages[0].draft.sourceLabel, 'example.com');
 });

@@ -1,7 +1,6 @@
 import {
   getHistoryItemCapturedTitleKey,
   getHistoryItemTitleOverrideKey,
-  getHistoryItemSourceLabel,
   getMeaningfulPageTitle
 } from './history-utils.js';
 import {
@@ -304,7 +303,6 @@ function notifyHistoryIndexUpdated(update) {
 
 function toInlineRenameDraft(draft) {
   return {
-    sourceLabel: getHistoryItemSourceLabel(draft),
     titleOverrideKey: draft.titleOverrideKey,
     url: draft.url,
     currentTitle: draft.currentTitle,

@@ -144,7 +144,7 @@ function collectHistoryGroups(items) {
   const buckets = new Map();
 
   for (const item of items) {
-    const key = getHistoryItemSourceLabel(item);
+    const key = getGroupKey(item);
     const current = buckets.get(key);
 
     if (!current) {
@@ -469,7 +469,7 @@ export function getHistoryItemComparator(sortOrder = 'default') {
   return HISTORY_ITEM_COMPARATORS[normalizeSortOrder(sortOrder)];
 }
 
-export function getHistoryItemSourceLabel(item) {
+function getGroupKey(item) {
   const rawUrl = String(item?.url ?? '');
 
   try {
