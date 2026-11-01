@@ -10,24 +10,23 @@
   </head>
   <body class="rename-body">
     <main class="rename-panel">
-      <header class="rename-header">
-        <h1>重命名网页</h1>
-        <p id="rename-url" class="rename-dialog-url"></p>
-      </header>
-
-      <form id="rename-form" class="rename-form">
+      <form id="rename-form" class="rename-dialog-form">
+        <header class="rename-dialog-header">
+          <h1>重命名网页</h1>
+          <p id="rename-url" class="rename-dialog-url"></p>
+        </header>
         <label class="field">
           <span>名称</span>
           <input id="rename-title" type="text" autocomplete="off" autofocus>
         </label>
 
-        <p id="rename-status" class="rename-status" role="alert"></p>
+        <p id="rename-status" class="rename-status rename-dialog-status" role="alert"></p>
 
-        <div class="rename-actions">
+        <div class="rename-dialog-actions">
           <button id="restore-button" class="secondary-button rename-restore" type="button">还原原名</button>
           <div class="rename-primary-actions">
-          <button id="cancel-button" class="secondary-button" type="button">取消</button>
-          <button class="primary-button" type="submit">保存</button>
+            <button id="cancel-button" class="secondary-button" type="button">取消</button>
+            <button class="primary-button" type="submit">保存</button>
           </div>
         </div>
       </form>

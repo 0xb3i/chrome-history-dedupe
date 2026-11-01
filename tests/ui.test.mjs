@@ -161,7 +161,7 @@ test('fallback rename window exposes its form and shared stylesheet', () => {
 });
 
 test('rename errors are inline and success messages use floating Ant styling', () => {
-  assert.ok(renameHtml.indexOf('id="rename-status"') < renameHtml.indexOf('class="rename-actions"'));
+  assert.ok(renameHtml.indexOf('id="rename-status"') < renameHtml.indexOf('class="rename-dialog-actions"'));
   assert.match(css, /\.rename-status \{[^}]*color: var\(--danger\);/);
   assert.match(css, /\.rename-status:empty \{[^}]*display: none;/);
   assert.match(css, /\.rename-message \{[^}]*position: fixed;[^}]*top: 16px;/);
