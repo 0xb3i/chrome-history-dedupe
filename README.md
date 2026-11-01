@@ -2,15 +2,15 @@
 
 Lightweight Chrome extension for searching history with automatic URL deduplication.
 
-## 1.11.6 正式版
+## 1.11.7 正式版
 
-小猫图标调整为与蓝色主题协调的浅蓝配色，保留原有造型，所有扩展入口同步更新。
+恢复微软 Fluent Emoji 的原始橙色小猫图标，工具栏、扩展管理页、设置页及标签页同步使用。
 
 小猫图标统一覆盖工具栏固定入口、扩展菜单、Chrome 扩展管理页、设置页及扩展页面的标签页图标；使用明确的小猫资源路径，避免沿用旧图标地址。
 
 统一已命名与已固定图标的轮廓宽度及描边，修复图钉偏窄、偏细的问题。
 
-设置入口简化为「设置」，扩展图标换为微软 Fluent Emoji 小猫头像的蓝色配色版本。
+设置入口简化为「设置」，扩展图标换为微软 Fluent Emoji 的原始橙色小猫头像。
 
 已命名与已固定状态支持同时显示，各自保持固定位置；统一图标尺寸并垂直居中。
 
@@ -28,7 +28,7 @@ Lightweight Chrome extension for searching history with automatic URL deduplicat
 - **底部栏**：左侧结果数量，右侧随焦点提示下一步按键（↓ 选择 / ↵ 打开）和 ⌘K 操作。
 - **改名面板**：一体化输入框，底部「还原原名｜取消 esc｜保存 ↵」。
 - **设置页**：备份与恢复、主题色、快捷键入口在扩展的「选项」页（扩展管理页的「扩展程序选项」，或「筛选与排序」里的「设置」）。
-- **图标**：采用 [Iconify 收录的 Fluent Emoji Flat 小猫头像](https://icon-sets.iconify.design/fluent-emoji-flat/cat-face/)，原作者为 Microsoft Corporation。基于[上游 SVG 原稿](https://github.com/microsoft/fluentui-emoji/blob/e8a613a0baedbca8f144fa70950714f2583318a8/assets/Cat%20face/Flat/cat_face_flat.svg)调整蓝色配色并保存为 `icons/cat.svg`，不修改轮廓和造型，使用 `rsvg-convert` 导出 16/32/48/128px PNG。素材使用 MIT 许可证，完整版权与许可文本见 [icons/LICENSE](icons/LICENSE)。
+- **图标**：采用 [Iconify 收录的 Fluent Emoji Flat 小猫头像](https://icon-sets.iconify.design/fluent-emoji-flat/cat-face/)，原作者为 Microsoft Corporation。保留[上游 SVG 原稿](https://github.com/microsoft/fluentui-emoji/blob/e8a613a0baedbca8f144fa70950714f2583318a8/assets/Cat%20face/Flat/cat_face_flat.svg)作为 `icons/cat.svg`，不修改原始配色、轮廓和造型，使用 `rsvg-convert` 导出 16/32/48/128px PNG。素材使用 MIT 许可证，完整版权与许可文本见 [icons/LICENSE](icons/LICENSE)。
 
 搜索框内选中的文字使用低饱和浅色背景，保留深色文字；选区比普通匹配高亮略深，兼顾辨识度与轻量风格。四种主题分别使用浅蓝、浅杏、浅绿和灰紫选区，弹窗与完整页共用；搜索框边框保持原有样式。
 
@@ -53,7 +53,7 @@ Lightweight Chrome extension for searching history with automatic URL deduplicat
 正式版包含历史搜索与资源去重、弹窗分组与完整页时间线、重命名与置顶、备份恢复和本地后台索引。v1.10.6 默认使用完整浅蓝主题，弹窗和完整页统一使用纯白底，不使用渐变，搜索框和交互色块保持轻量，主题统一覆盖列表交互态、文字、边框、菜单、来源色点及交互高亮，提供蓝色、暖橙、绿色和中性四种完整浅色主题，选择会保存在扩展存储中，快捷键重命名浮层与独立重命名窗口共用主题；弹窗底部及完整页顶部可切换。界面采用 Raycast 风格的浅色启动器界面：弹窗直接从搜索框开始，完整页入口位于底部右侧；结果行标题与小号「已命名」状态位于上行，来源、访问次数与相对时间位于左下；今天显示时刻、昨天显示「昨天」、近一周显示星期、更早显示日期，悬停查看完整时间，改名、固定及链接数量位于右下；配合整行焦点反馈，底部只保留主题与完整页入口，延续 v1.1.0 的搜索和键盘操作。
 
 - **运行环境：** Chrome 105 及以上；扩展不在无痕模式中运行。直接加载项目目录即可使用，无需构建或安装 Node.js。
-- **升级方式：** 在原目录更新文件，在 `chrome://extensions` 点击「重新加载」，重新打开搜索弹窗，确认扩展管理页显示 `v1.11.6`。旧版用户数据沿用现有迁移流程；移动目录或重新安装前按下文导出备份。
+- **升级方式：** 在原目录更新文件，在 `chrome://extensions` 点击「重新加载」，重新打开搜索弹窗，确认扩展管理页显示 `v1.11.7`。旧版用户数据沿用现有迁移流程；移动目录或重新安装前按下文导出备份。
 - **首次使用：** 后台需要读取 Chrome 历史并建立索引；历史较多时初始化需要时间。之后关键词搜索使用本地索引。
 - **数据边界：** 去重只影响展示，不删除 Chrome 原始历史。重命名页面仍依赖浏览器保留对应历史；备份不包含原始历史。扩展不上传数据，也不提供跨设备同步。
 
