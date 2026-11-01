@@ -2181,7 +2181,7 @@ input {
 .popup-body .popup-results .result-item {
   --source-column: 112px;
   --time-column: 54px;
-  --state-column: 16px;
+  --state-column: 32px;
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) var(--source-column) var(--time-column) var(--state-column);
@@ -2292,19 +2292,23 @@ input {
   text-align: center;
 }
 
-/* State slot: one quiet icon per row — a pin, or a tag for renamed pages. */
+/* Independent status columns keep renamed and pinned indicators in place. */
 .popup-body .popup-results .result-state {
   grid-area: state;
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(2, 14px);
+  column-gap: 4px;
   align-items: center;
-  justify-content: center;
-  width: 16px;
+  justify-items: center;
+  width: var(--state-column);
   height: 20px;
   color: var(--pop-tertiary);
 }
 
 .popup-body .popup-results .result-state .result-custom-label {
+  grid-column: 1;
+  grid-row: 1;
   width: 13px;
   height: 13px;
   margin: 0;
@@ -2317,18 +2321,25 @@ input {
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M2.75 2.75h4.7l5.8 5.8-4.7 4.7-5.8-5.8z' fill='none' stroke='black' stroke-width='1.4' stroke-linejoin='round'/%3E%3Ccircle cx='5.7' cy='5.7' r='1.05'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
-/* A page that is both pinned and renamed shows the pin; the name still reads as custom. */
-.popup-body .popup-results .result-state:has(.result-state-icons) .result-custom-label {
-  display: none;
-}
-
 .popup-body .popup-results .result-state .result-state-icons {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
   margin: 0;
   padding: 0;
 }
 
 .popup-body .popup-results .result-state .result-state-icon {
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
   color: var(--pop-tertiary);
+}
+
+.popup-body .popup-results .result-state .result-state-icon svg {
+  width: 13px;
+  height: 13px;
 }
 
 /* Time: fixed column, right-aligned. */

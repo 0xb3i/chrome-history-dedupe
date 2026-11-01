@@ -396,8 +396,8 @@ function initializePrimaryKeyHint() {
   for (const type of ['focusin', 'keyup', 'click']) document.addEventListener(type, sync);
 }
 
-// Launcher rows use fixed columns so every row lines up: title, source, one
-// state slot (renamed, pinned or the link count) and time.
+// Launcher rows use fixed columns for title, source, time and independent
+// renamed/pinned indicators.
 function arrangePopupRow(titleRow, meta, stateSlot) {
   const host = meta.querySelector('.result-host');
   if (host) meta.before(host);
