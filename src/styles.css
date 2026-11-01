@@ -1746,7 +1746,7 @@ input {
    Scoped to the popup; the full history page keeps the shared rules above. */
 .popup-body,
 .rename-body {
-  --pop-bg: #fbfbfb;
+  --pop-bg: #ffffff;
   --pop-text: #1d1d1f;
   --pop-secondary: #6e6e73;
   --pop-tertiary: #8e8e93;
