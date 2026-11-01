@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "喵寻",
-  "version": "1.11.13",
+  "name": "喵迹",
+  "version": "1.11.14",
   "minimum_chrome_version": "105",
   "incognito": "not_allowed",
   "description": "找回看过的页面，少一点重复，多一点清爽。",
@@ -29,7 +29,7 @@
     "open_in_tab": true
   },
   "action": {
-    "default_title": "喵寻",
+    "default_title": "喵迹",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/cat-16.png",
