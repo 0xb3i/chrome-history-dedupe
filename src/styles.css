@@ -2155,7 +2155,6 @@ input {
    favicon | title (flexes) | source (fixed) | state slot | time.
    The favicon lives in the source button but is drawn in the leading column. */
 .popup-body .popup-results {
-  --pop-result-meta: #9c9ca1;
   gap: 0;
   padding: 0;
 }
@@ -2244,7 +2243,7 @@ input {
   min-width: 0;
   max-width: 100%;
   margin: 0 0 0 4px;
-  color: var(--pop-result-meta);
+  color: var(--pop-secondary);
   font-size: 12px;
   line-height: 20px;
 }
@@ -2331,14 +2330,14 @@ input {
   flex-wrap: nowrap;
   gap: 0;
   margin: 0;
-  color: var(--pop-result-meta);
+  color: var(--pop-secondary);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
 
 .popup-body .popup-results .result-meta .tag {
-  color: var(--pop-result-meta);
+  color: var(--pop-secondary);
   font-size: 12px;
   line-height: 18px;
 }
