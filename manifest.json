@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "喵寻",
-  "version": "1.11.12",
+  "version": "1.11.13",
   "minimum_chrome_version": "105",
   "incognito": "not_allowed",
   "description": "找回看过的页面，少一点重复，多一点清爽。",
