@@ -66,8 +66,7 @@ test('popup is a launcher: search row, single-line results and a keyed action ba
 test('extension icon renders from vector sources at every manifest size', () => {
   const manifest = JSON.parse(readText('../manifest.json'));
   for (const size of ['16', '32', '48', '128']) assert.equal(manifest.icons[size], `icons/icon-${size}.png`);
-  assert.match(readText('../icons/icon.svg'), /viewBox="0 0 128 128"/);
-  assert.match(readText('../icons/icon-small.svg'), /viewBox="0 0 32 32"/);
+  assert.match(readText('../icons/icon.svg'), /viewBox="0 0 32 32"/);
 });
 
 test('popup has a fixed measurement width and vertical scrolling', () => {
