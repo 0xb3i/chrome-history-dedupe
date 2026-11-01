@@ -2154,14 +2154,10 @@ input {
   padding-top: 8px;
 }
 
-.popup-body .popup-result-scroll {
-  padding-top: 6px;
-}
-
 .popup-body .source-filter-bar {
   align-self: flex-start;
   max-width: calc(100% - 28px);
-  margin: 10px 14px 0;
+  margin: 10px 14px 8px;
   padding: 0 2px 0 10px;
   border-radius: 999px;
   background: var(--pop-fill);

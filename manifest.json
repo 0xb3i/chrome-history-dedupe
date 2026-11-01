@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "喵迹",
-  "version": "1.12.2",
+  "version": "1.12.3",
   "minimum_chrome_version": "105",
   "incognito": "not_allowed",
   "description": "找回看过的页面，少一点重复，多一点清爽。",
