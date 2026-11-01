@@ -73,6 +73,7 @@ button,
 input,
 select {
   font: inherit;
+  appearance: none;
 }
 
 button:focus-visible,
@@ -386,12 +387,7 @@ h1 {
 }
 
 .native-select-hidden {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  opacity: 0;
-  pointer-events: none;
+  display: none;
 }
 
 .select-combobox {
@@ -1301,7 +1297,7 @@ kbd {
 }
 
 ::selection {
-  background: var(--accent-active-bg);
+  background: var(--selection-bg);
   color: var(--text);
 }
 
@@ -1314,9 +1310,27 @@ input {
   caret-color: var(--text);
 }
 
-.popup-result-scroll {
+.popup-result-scroll,
+.select-combobox-menu,
+.actions-panel-list {
   scrollbar-width: thin;
   scrollbar-color: var(--scroll-thumb) transparent;
+}
+
+:is(.popup-result-scroll, .select-combobox-menu, .actions-panel-list)::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+:is(.popup-result-scroll, .select-combobox-menu, .actions-panel-list)::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 4px;
+  background: var(--scroll-thumb);
+  background-clip: padding-box;
+}
+
+:is(.popup-result-scroll, .select-combobox-menu, .actions-panel-list)::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .popup-results > .result-item:first-child {
@@ -1745,14 +1759,15 @@ input {
 /* Popup launcher: one search row, single-line results, an action bar.
    Scoped to the popup; the full history page keeps the shared rules above. */
 .popup-body,
-.rename-body {
+.rename-body,
+.settings-body {
   --pop-bg: #ffffff;
   --pop-text: #1d1d1f;
   --pop-secondary: #6e6e73;
   --pop-tertiary: #8e8e93;
   --pop-hairline: rgba(0, 0, 0, 0.08);
-  --pop-hover: rgba(0, 0, 0, 0.04);
-  --pop-selected: rgba(0, 0, 0, 0.07);
+  --pop-hover: var(--surface-hover);
+  --pop-selected: var(--accent-tint);
   --pop-fill: rgba(0, 0, 0, 0.055);
   --pop-control-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 1px 1px rgba(0, 0, 0, 0.05);
   --pop-popover-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 8px 24px -4px rgba(0, 0, 0, 0.16), 0 2px 6px rgba(0, 0, 0, 0.06);
@@ -1818,7 +1833,7 @@ input {
 }
 
 /* Pop-up buttons: white, hairline, compact up/down caret. */
-.popup-body .select-combobox-button {
+:is(.popup-body, .settings-body) .select-combobox-button {
   grid-template-columns: auto 10px;
   column-gap: 6px;
   min-height: 26px;
@@ -1829,7 +1844,7 @@ input {
   line-height: 18px;
 }
 
-.popup-body .select-combobox-arrow {
+:is(.popup-body, .settings-body) .select-combobox-arrow {
   width: 10px;
   height: 10px;
   background: currentColor;
@@ -1837,7 +1852,7 @@ input {
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.5 4.5 6 2l2.5 2.5M3.5 7.5 6 10l2.5-2.5' fill='none' stroke='black' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
-.popup-body .select-combobox-arrow::before {
+:is(.popup-body, .settings-body) .select-combobox-arrow::before {
   display: none;
 }
 
@@ -1845,6 +1860,7 @@ input {
   width: auto;
 }
 
+.settings-body .select-combobox-button,
 .popup-body .range-control .select-combobox-button,
 .popup-body .range-control .select-combobox-button:is(:hover, [aria-expanded="true"]) {
   background: #fff;
@@ -1852,12 +1868,12 @@ input {
   color: var(--pop-text);
 }
 
-.popup-body .select-combobox-button:focus-visible {
+:is(.popup-body, .settings-body) .select-combobox-button:focus-visible {
   outline: none;
   box-shadow: var(--pop-control-shadow), 0 0 0 3px var(--focus-ring);
 }
 
-.popup-body .select-combobox-menu {
+:is(.popup-body, .settings-body) .select-combobox-menu {
   min-width: 128px;
   border: 0;
   border-radius: 8px;
@@ -1871,7 +1887,7 @@ input {
   right: 0;
 }
 
-.popup-body .select-combobox-option {
+:is(.popup-body, .settings-body) .select-combobox-option {
   grid-template-columns: 14px minmax(0, 1fr);
   column-gap: 4px;
   min-height: 28px;
@@ -1882,34 +1898,57 @@ input {
   cursor: default;
 }
 
-.popup-body .select-combobox-option::before {
+:is(.popup-body, .settings-body) .select-combobox-option::before {
   grid-column: 1;
   content: "";
 }
 
-.popup-body .select-combobox-option:is(:hover, :focus-visible) {
+:is(.popup-body, .settings-body) .select-combobox-option:is(:hover, :focus-visible) {
   background: var(--pop-selected);
 }
 
-.popup-body .select-combobox-option[aria-selected="true"] {
-  background: transparent;
-  color: var(--pop-text);
+:is(.popup-body, .settings-body) .select-combobox-option[aria-selected="true"] {
+  background: var(--accent-tint);
+  color: var(--accent);
   font-weight: 500;
 }
 
-.popup-body .select-combobox-option[aria-selected="true"]:is(:hover, :focus-visible) {
+:is(.popup-body, .settings-body) .select-combobox-option[aria-selected="true"]:is(:hover, :focus-visible) {
   background: var(--pop-selected);
 }
 
-.popup-body .select-combobox-option[aria-selected="true"]::before {
+:is(.popup-body, .settings-body) .select-combobox-option[aria-selected="true"]::before {
   content: "\2713";
   font-size: 11px;
   font-weight: 600;
   text-align: center;
 }
 
-.popup-body .select-combobox-option[aria-selected="true"]::after {
+:is(.popup-body, .settings-body) .select-combobox-option[aria-selected="true"]::after {
   content: none;
+}
+
+.settings-body .select-combobox {
+  flex: 0 0 112px;
+  width: 112px;
+}
+
+.settings-body .select-combobox-button {
+  min-height: 28px;
+  color: var(--pop-text);
+  font-weight: 500;
+}
+
+.settings-body .select-combobox-option[aria-selected="true"],
+.settings-body .select-combobox-option[aria-selected="true"]:is(:hover, :focus-visible),
+.settings-body .select-combobox-option:is(:hover, :focus-visible) {
+  background: var(--pop-fill);
+  color: var(--pop-text);
+}
+
+.settings-body .select-combobox-menu {
+  left: auto;
+  right: 0;
 }
 
 /* Display options: one icon button, one small panel (also ⌘K / Ctrl+K). */
@@ -2221,16 +2260,14 @@ input {
   white-space: nowrap;
 }
 
-/* macOS find highlight: a soft yellow wash with a darker underline. The wash
-   is a gradient on the text box, so it hugs the glyphs and never bleeds into an
-   ellipsis. */
+/* A theme-tinted find highlight, clipped with the title at its ellipsis. */
 .popup-body .popup-results :is(.result-title, .result-match) mark {
   padding: 0 1px;
   margin: 0 -1px;
   border-radius: 3px;
-  background: rgba(255, 204, 0, 0.26);
-  box-shadow: inset 0 -1.5px 0 rgba(214, 158, 0, 0.6);
-  color: inherit;
+  background: var(--match-bg);
+  box-shadow: inset 0 -1.5px 0 var(--selection-bg);
+  color: var(--match-text);
   -webkit-box-decoration-break: clone;
   box-decoration-break: clone;
 }
@@ -2612,7 +2649,7 @@ input {
 
 .rename-body .rename-dialog-form > .field input::selection,
 .popup-body .rename-dialog-form > .field input::selection {
-  background: #b3d7ff;
+  background: var(--selection-bg);
   color: var(--pop-text);
 }
 
@@ -2910,7 +2947,7 @@ input {
 
 .settings-note {
   margin: 8px 12px 0;
-  color: #8e8e93;
+  color: var(--pop-secondary);
   font-size: 12px;
 }
 
@@ -3046,23 +3083,4 @@ input {
   .actions-panel {
     animation: none;
   }
-}
-
-.settings-select {
-  min-height: 28px;
-  padding: 0 28px 0 10px;
-  border: 0;
-  border-radius: 6px;
-  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M3.5 4.5 6 2l2.5 2.5M3.5 7.5 6 10l2.5-2.5' fill='none' stroke='%2386868b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") right 9px center / 10px no-repeat;
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 1px 1px rgba(0, 0, 0, 0.05);
-  color: #1d1d1f;
-  font: inherit;
-  font-size: 13px;
-  font-weight: 500;
-  appearance: none;
-}
-
-.settings-select:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 0 0 3px rgba(0, 122, 255, 0.32);
 }

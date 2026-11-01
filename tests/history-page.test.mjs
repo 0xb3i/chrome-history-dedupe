@@ -111,6 +111,9 @@ async function createPage({ file = 'popup.html', items = [], titles = new Map(),
     document, one, all, opened, writes, writeViews, listeners, optionsOpened, tabsCreated,
     titles: () => all('#results a.result-title').map((link) => link.textContent),
     fire,
+    storageChanged(changes, area = 'local') {
+      for (const listener of listeners.storage) listener(changes, area);
+    },
     openActions(row) {
       row?.querySelector('a.result-title')?.focus();
       fire(document, 'keydown', { key: 'k', ctrlKey: true, metaKey: true });
@@ -234,6 +237,16 @@ test('popup follows the theme saved on the settings page without changing result
   assert.deepEqual(page.all('.result-title').map((link) => link.href), before);
 });
 
+test('theme changes apply before history preferences finish loading', async () => {
+  const preferences = deferred();
+  const page = await createPage({ loadPreferences: () => preferences.promise });
+  for (const listener of page.listeners.storage) listener({ 'history-ui-color': { newValue: 'orange' } }, 'local');
+  assert.equal(page.document.documentElement.dataset.themeColor, 'orange');
+  preferences.resolve({ range: 'all' });
+  await settle();
+  assert.equal(page.document.documentElement.dataset.themeColor, 'orange');
+});
+
 test('sorting controls order results, preserve pins, and apply to refreshed data', async () => {
   const items = [
     pageItem('项目 C', 'c', { totalVisitCount: 30, lastVisitTime: now - 3 * day }),
@@ -256,7 +269,7 @@ test('sorting controls order results, preserve pins, and apply to refreshed data
     assert.deepEqual(page.titles(), ['项目 A', '项目 B', '项目 C']);
     assert.equal(page.writes.at(-1).sortOrder, 'name');
     assert.equal(page.document.activeElement, page.one('[data-select-id="sort-order"] .select-combobox-button'));
-    page.listeners.storage[0]({ [imports.PINNED_URLS_STORAGE_KEY]: { newValue: [items[2].url] } }, 'local');
+    page.storageChanged({ [imports.PINNED_URLS_STORAGE_KEY]: { newValue: [items[2].url] } });
     assert.deepEqual(page.titles(), ['项目 B', '项目 A', '项目 C']);
     await page.changeSort('recent');
     index = { revision: 2, pageItems: [{ ...items[0], lastVisitTime: now + day }, ...items.slice(1)] };
@@ -369,7 +382,7 @@ test('source badges preserve tab ranking and keep group identity through filteri
   await page.flush();
   assert.deepEqual(page.titles(), ['编译甲', '编译丙']);
   assert.ok(page.all('.result-host').every((badge) => badge.dataset.sourceTone === tone));
-  page.listeners.storage[0]({ [imports.GROUP_NAME_OVERRIDES_STORAGE_KEY]: {
+  page.storageChanged({ [imports.GROUP_NAME_OVERRIDES_STORAGE_KEY]: {
     newValue: { 'build.example.com': '构建服务' }
   } }, 'local');
   await page.flush();
@@ -428,7 +441,7 @@ test('recency sort splits results into pinned, today, yesterday, this week and m
     ? `${old.getMonth() + 1} 月` : `${old.getFullYear()} 年 ${old.getMonth() + 1} 月`;
   assert.deepEqual(page.all('.result-section').map((section) => section.textContent), ['今天', '昨天', '本周', month]);
   assert.deepEqual(page.titles(), ['今天的页面', '昨天的页面', '前天的页面', '很早的页面']);
-  page.listeners.storage[0]({ [imports.PINNED_URLS_STORAGE_KEY]: { newValue: [items[3].url] } }, 'local');
+  page.storageChanged({ [imports.PINNED_URLS_STORAGE_KEY]: { newValue: [items[3].url] } });
   assert.equal(page.all('.result-section')[0].textContent, '已固定');
 });
 
@@ -619,7 +632,7 @@ test('initial preference failure offers a retry that initializes and searches su
   await settle();
   assert.deepEqual(page.titles(), ['恢复后的页面']);
   assert.equal(page.one('#empty-state').hidden, true);
-  assert.equal(page.listeners.storage.length, 1);
+  assert.equal(page.listeners.storage.length, 2);
   assert.equal(page.listeners.runtime.length, 1);
 });
 

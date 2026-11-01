@@ -168,6 +168,10 @@ queryInput.addEventListener('compositionstart', () => liveSearch.compositionStar
 queryInput.addEventListener('compositionend', () => liveSearch.compositionEnd());
 rangeSelect.addEventListener('change', () => liveSearch.change());
 rangeDropdown = createSelectControl(rangeSelect, { label: '时间筛选' });
+// Theme changes must work even while the history index is still loading.
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === 'local' && changes[THEME_STORAGE_KEY]) applyTheme(document, changes[THEME_STORAGE_KEY].newValue);
+});
 applySavedTheme(document, { watch: false });
 document.querySelector('#result-controls').append(createSortControl());
 initializeViewOptions();
@@ -1211,8 +1215,6 @@ function addStorageChangeListener() {
       );
       scheduleSnapshotRender();
     }
-
-    if (changes[THEME_STORAGE_KEY]) applyTheme(document, changes[THEME_STORAGE_KEY].newValue);
 
     if (changes[TITLE_OVERRIDES_STORAGE_KEY]) {
       titleOverrides = normalizePageTitleOverrideMap(

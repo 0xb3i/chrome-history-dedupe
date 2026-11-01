@@ -6,6 +6,7 @@ import {
   saveTitleOverride
 } from './storage.js';
 import { observeContentWindowHeight } from './window-placement.js';
+import { applySavedTheme } from './theme.js';
 
 const form = document.querySelector('#rename-form');
 const titleInput = document.querySelector('#rename-title');
@@ -17,11 +18,7 @@ const restoreButton = document.querySelector('#restore-button');
 const stopFittingWindow = observeContentWindowHeight(form);
 globalThis.addEventListener('pagehide', stopFittingWindow, { once: true });
 
-globalThis.chrome?.storage?.local?.get?.('history-ui-color', (saved) => {
-  if (['blue', 'orange', 'green', 'neutral'].includes(saved?.['history-ui-color'])) {
-    document.documentElement.dataset.themeColor = saved['history-ui-color'];
-  }
-});
+applySavedTheme(document);
 
 let currentDraft = null;
 let canRestoreOriginalTitle = false;

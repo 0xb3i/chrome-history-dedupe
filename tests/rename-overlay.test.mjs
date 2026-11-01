@@ -19,9 +19,11 @@ test('reopening and canceling inline rename disposes every previous key listener
   app.open();
   assert.equal(app.root.children.length, 1);
   assert.equal(app.keyListeners.size, 1);
+  assert.equal(app.themeListeners.size, 1);
   app.escape();
   assert.equal(app.root.children.length, 0);
   assert.equal(app.keyListeners.size, 0);
+  assert.equal(app.themeListeners.size, 0);
 });
 
 test('saving uses the current draft and closes only its own session after success', async () => {
@@ -84,9 +86,51 @@ test('restore errors remain inline and re-enable controls for retry', async () =
   assert.equal(app.panel.querySelector('[data-restore-available]').disabled, false);
 });
 
+
+test('inline rename follows saved theme and later changes without using the host page storage', () => {
+  const app = createOverlayHarness();
+  app.open();
+  const host = app.root.children[0];
+  assert.equal(host.dataset.themeColor, 'blue');
+  app.respondTheme(0, 'orange');
+  assert.equal(host.dataset.themeColor, 'orange');
+  app.changeTheme('green', 'sync');
+  assert.equal(host.dataset.themeColor, 'orange');
+  app.changeTheme('green');
+  assert.equal(host.dataset.themeColor, 'green');
+  app.changeTheme('unknown');
+  assert.equal(host.dataset.themeColor, 'green');
+  app.changeTheme(undefined);
+  assert.equal(host.dataset.themeColor, 'blue');
+});
+
+test('late initial theme read cannot override a newer theme event', () => {
+  const app = createOverlayHarness();
+  app.open();
+  app.changeTheme('green');
+  app.respondTheme(0, 'orange');
+  assert.equal(app.root.children[0].dataset.themeColor, 'green');
+});
+
+test('closed theme sessions release listeners and ignore outstanding reads', () => {
+  const app = createOverlayHarness();
+  app.open();
+  const oldHost = app.root.children[0];
+  app.open();
+  assert.equal(app.themeListeners.size, 1);
+  app.respondTheme(0, 'orange');
+  assert.equal(oldHost.dataset.themeColor, 'blue');
+  app.respondTheme(1, 'green');
+  assert.equal(app.root.children[0].dataset.themeColor, 'green');
+  app.escape();
+  assert.equal(app.themeListeners.size, 0);
+});
+
 function createOverlayHarness() {
   const root = new FakeElement('html');
   const keyListeners = new Set();
+  const themeListeners = new Set();
+  const themeReads = [];
   const messages = [];
   const timers = new Map();
   let nextTimer = 0;
@@ -97,7 +141,18 @@ function createOverlayHarness() {
       addEventListener: (_type, listener) => keyListeners.add(listener),
       removeEventListener: (_type, listener) => keyListeners.delete(listener)
     },
+    localStorage: {
+      getItem() { throw new Error('Must not read the host page storage'); },
+      setItem() { throw new Error('Must not write the host page storage'); }
+    },
     chrome: {
+      storage: {
+        local: { get: (_key, callback) => themeReads.push(callback) },
+        onChanged: {
+          addListener: (listener) => themeListeners.add(listener),
+          removeListener: (listener) => themeListeners.delete(listener)
+        }
+      },
       runtime: {
         onMessage: { addListener: (listener) => { onMessage = listener; } },
         sendMessage: (message, respond) => messages.push({ message, respond })
@@ -108,7 +163,11 @@ function createOverlayHarness() {
   });
   vm.runInContext(source, context);
   return {
-    root, keyListeners, messages, timers,
+    root, keyListeners, messages, timers, themeListeners,
+    respondTheme(index, value) { themeReads[index]({ 'history-ui-color': value }); },
+    changeTheme(value, area = 'local') {
+      for (const listener of themeListeners) listener({ 'history-ui-color': { newValue: value } }, area);
+    },
     get panel() { return root.children[0].shadow.querySelector('form'); },
     open(value = draft) {
       onMessage({ type: 'deduped-history:init-inline-rename', draft: value }, null, () => {});

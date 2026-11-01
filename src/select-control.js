@@ -1,4 +1,4 @@
-// Shared Ant-style surface for the page's native select value models.
+// Shared menu surface; native selects remain the page's value models only.
 export function createSelectControl(select, { label }) {
   const document = select.ownerDocument;
   const wrapper = document.createElement('div');
@@ -83,7 +83,7 @@ export function createSelectControl(select, { label }) {
       button.focus();
     }
   });
-  // There are only two controls, both owned by the page for its full lifetime.
+  // Each control is owned by its page for the full page lifetime.
   for (const type of ['click', 'focusin']) document.addEventListener(type, (event) => {
     if (!wrapper.contains(event.target)) close();
   });

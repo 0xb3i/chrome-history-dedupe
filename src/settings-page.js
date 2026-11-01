@@ -1,12 +1,18 @@
 import { initializeUserDataControls } from './user-data-controls.js';
 import { applySavedTheme, saveTheme } from './theme.js';
+import { createSelectControl } from './select-control.js';
 
 const version = globalThis.chrome?.runtime?.getManifest?.()?.version;
 const versionLabel = document.querySelector('#app-version');
 if (version && versionLabel) versionLabel.textContent = `版本 ${version}`;
 
 const themeSelect = document.querySelector('#theme-color');
-applySavedTheme(document, { onChange: (value) => { if (themeSelect) themeSelect.value = value; } });
+const themeDropdown = themeSelect && createSelectControl(themeSelect, { label: '主题色' });
+applySavedTheme(document, { onChange: (value) => {
+  if (!themeSelect) return;
+  themeSelect.value = value;
+  themeDropdown.sync();
+} });
 themeSelect?.addEventListener('change', () => saveTheme(document, themeSelect.value));
 
 document.querySelector('#shortcut-settings')?.addEventListener('click', () => {

@@ -138,6 +138,20 @@ test('theme palettes cover surfaces and content rather than only accent colors',
   const popup = css.match(/\.popup-body \{([^}]+)\}/)?.[1];
   assert.ok(popup.includes('var(--bg)'));
   assert.ok(!popup.includes('gradient'));
+  // The launcher must consume the palette, rather than hide it behind fixed
+  // gray selection and yellow highlights. Its white canvas stays neutral.
+  const surfaces = css.match(/\.popup-body,\s*\.rename-body,\s*\.settings-body \{([^}]+)\}/)?.[1];
+  assert.match(surfaces, /--pop-bg: #ffffff;/);
+  assert.match(surfaces, /--pop-selected: var\(--accent-tint\);/);
+  assert.match(surfaces, /--pop-hover: var\(--surface-hover\);/);
+  const highlight = css.match(/\.popup-body \.popup-results :is\(\.result-title, \.result-match\) mark \{([^}]+)\}/)?.[1];
+  assert.match(highlight, /background: var\(--match-bg\);/);
+  assert.match(highlight, /color: var\(--match-text\);/);
+  assert.doesNotMatch(css, /background: #b3d7ff;/);
+  // Theme names are controls, not swatches: their trigger stays neutral.
+  const themeTrigger = css.match(/\.settings-body \.select-combobox-button \{([^}]+)\}/)?.[1];
+  assert.match(themeTrigger, /color: var\(--pop-text\);/);
+  assert.match(css, /\.native-select-hidden \{\s*display: none;/);
 });
 
 test('result state icons stay compact and result rows do not select text accidentally', () => {

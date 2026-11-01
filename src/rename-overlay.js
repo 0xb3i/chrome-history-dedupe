@@ -99,10 +99,6 @@
     panel.append(title, url, field, status, actions);
     overlay.append(panel);
     shadow.append(createStyle(), overlay);
-    chrome.storage?.local?.get?.('history-ui-color', (saved) => {
-      const theme = saved?.['history-ui-color'];
-      if (['blue', 'orange', 'green', 'neutral'].includes(theme)) host.dataset.themeColor = theme;
-    });
 
     const protectRenameKeystroke = (event) => {
       if (!event.composedPath().includes(host)) {
@@ -118,11 +114,21 @@
     };
     let disposed = false;
     let closeTimer = null;
+    let themeRevision = 0;
+    const applyOverlayTheme = (value = 'blue') => {
+      if (disposed || !['blue', 'orange', 'green', 'neutral'].includes(value)) return;
+      host.dataset.themeColor = value;
+      themeRevision += 1;
+    };
+    const onThemeChanged = (changes, area) => {
+      if (area === 'local' && changes['history-ui-color']) applyOverlayTheme(changes['history-ui-color'].newValue);
+    };
     const close = () => {
       if (disposed) return;
       disposed = true;
       if (closeTimer !== null) globalThis.clearTimeout(closeTimer);
       window.removeEventListener('keydown', protectRenameKeystroke, true);
+      chrome.storage?.onChanged?.removeListener?.(onThemeChanged);
       host.remove();
       if (currentSession === session) currentSession = null;
     };
@@ -134,6 +140,14 @@
       }
     };
     currentSession = session;
+
+    applyOverlayTheme();
+    chrome.storage?.onChanged?.addListener?.(onThemeChanged);
+    const initialThemeRevision = themeRevision;
+    chrome.storage?.local?.get?.('history-ui-color', (saved) => {
+      const failed = Boolean(chrome.runtime.lastError);
+      if (!failed && themeRevision === initialThemeRevision) applyOverlayTheme(saved?.['history-ui-color']);
+    });
 
     window.addEventListener('keydown', protectRenameKeystroke, true);
 
@@ -360,8 +374,13 @@
       }
 
       input:focus {
-        border-color: #c4c9d1;
-        box-shadow: none;
+        border-color: var(--accent);
+        box-shadow: 0 0 0 2px var(--selection);
+      }
+
+      button:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
       }
 
       .target-url {
