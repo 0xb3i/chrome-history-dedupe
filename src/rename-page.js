@@ -6,6 +6,7 @@ import {
   saveTitleOverride
 } from './storage.js';
 import { observeContentWindowHeight } from './window-placement.js';
+import { getHistoryItemSourceLabel } from './history-utils.js';
 import { applySavedTheme } from './theme.js';
 
 const form = document.querySelector('#rename-form');
@@ -60,7 +61,7 @@ async function init() {
     }
 
     titleInput.value = currentDraft.currentTitle;
-    urlLabel.textContent = currentDraft.url;
+    urlLabel.textContent = getHistoryItemSourceLabel(currentDraft);
     urlLabel.title = currentDraft.url;
     canRestoreOriginalTitle = await hasTitleOverride(currentDraft.titleOverrideKey);
     restoreButton.hidden = !canRestoreOriginalTitle;

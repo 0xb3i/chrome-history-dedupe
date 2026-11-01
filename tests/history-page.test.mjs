@@ -511,7 +511,7 @@ test('⌘K and right-click open the focused row\'s actions: open, copy, rename, 
   assert.equal(panel.hidden, false);
   page.action('重命名网页').click();
   assert.equal(page.one('dialog[open]').getAttribute('aria-label'), '重命名网页');
-  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, items[1].url);
+  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, 'docs.example.org');
   assert.equal(page.one('dialog[open] .rename-dialog-url').title, items[1].url);
   page.button('取消', page.one('dialog[open]')).click();
 
@@ -550,7 +550,7 @@ test('same-title links collapse to one row that opens the most visited link; oth
   assert.deepEqual(links.map((link) => link.title), [items[0].url, items[2].url]);
   assert.ok(links.every((link) => /次访问$/.test(link.querySelector('.actions-item-detail').textContent)));
   page.fire(page.document.activeElement, 'keydown', { key: 'F2' });
-  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, items[0].url);
+  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, 'example.com');
   assert.equal(page.one('dialog[open] .rename-dialog-url').title, items[0].url);
   page.button('取消', page.one('dialog[open]')).click();
 
@@ -588,7 +588,7 @@ test('result navigation joins the page, preserves refresh focus, and leaves rena
   assert.equal(dialog.getAttribute('aria-label'), '重命名网页');
   assert.deepEqual([...dialog.querySelector('.rename-primary-actions').children].map((button) => button.textContent),
     ['取消', '保存']);
-  assert.equal(dialog.querySelector('.rename-dialog-url').textContent, items[1].url);
+  assert.equal(dialog.querySelector('.rename-dialog-url').textContent, 'example.com');
   assert.equal(dialog.querySelector('.rename-dialog-url').title, items[1].url);
   assert.equal(page.fire(query, 'keydown', { key: 'ArrowDown' }).defaultPrevented, false);
 });

@@ -187,7 +187,7 @@ test('inline rename surface uses shadow DOM and labeled actions', () => {
   for (const label of ['保存', '还原原名', '取消']) {
     assert.ok(renameOverlayJs.includes(`textContent = '${label}'`));
   }
-  assert.match(renameOverlayJs, /url\.textContent = draft\.url/);
+  assert.match(renameOverlayJs, /new URL\(draft\.url\)/);
   assert.ok(renameOverlayJs.includes('deduped-history:init-inline-rename'));
 });
 

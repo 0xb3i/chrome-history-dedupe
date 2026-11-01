@@ -12,21 +12,25 @@ const draft = {
   hasTitleOverride: true
 };
 
-test('inline rename shows the URL when an existing background sends no derived source label', () => {
+test('inline rename derives a domain when an existing background sends no source label', () => {
   const app = createOverlayHarness();
   app.open();
   const source = app.panel.querySelector('.target-url');
-  assert.equal(source.textContent, draft.url);
+  assert.equal(source.textContent, 'example.com');
   assert.equal(source.title, draft.url);
   assert.equal(app.panel.querySelector('input').value, draft.currentTitle);
 });
 
-for (const url of ['https://docs.example.com/wiki/document?view=detail#section', 'file:///Users/example/report.html']) {
-  test(`inline rename preserves the original address even when a source label exists (${url})`, () => {
+for (const [url, label] of [
+  ['https://docs.example.com/wiki/document?view=detail#section', 'docs.example.com'],
+  ['file:///Users/example/report.html', '本地文件'],
+  ['invalid address', 'invalid address']
+]) {
+  test(`inline rename derives a concise label and keeps the full tooltip (${url})`, () => {
     const app = createOverlayHarness();
     app.open({ ...draft, url, sourceLabel: '来源名称' });
     const address = app.panel.querySelector('.target-url');
-    assert.equal(address.textContent, url);
+    assert.equal(address.textContent, label);
     assert.equal(address.title, url);
   });
 }
@@ -155,6 +159,7 @@ function createOverlayHarness() {
   let nextTimer = 0;
   let onMessage;
   const context = vm.createContext({
+    URL,
     document: { documentElement: root, createElement: (tag) => new FakeElement(tag) },
     window: {
       addEventListener: (_type, listener) => keyListeners.add(listener),

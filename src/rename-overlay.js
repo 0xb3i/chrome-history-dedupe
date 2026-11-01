@@ -45,7 +45,14 @@
 
     const url = document.createElement('p');
     url.className = 'target-url';
-    url.textContent = draft.url;
+    // This classic content script runs separately from the module pages. Derive
+    // the label from the stable URL rather than requiring new background fields.
+    try {
+      const address = new URL(draft.url);
+      url.textContent = address.protocol === 'file:' ? '本地文件' : address.hostname || draft.url;
+    } catch {
+      url.textContent = draft.url;
+    }
     url.title = draft.url;
 
     const field = document.createElement('label');
