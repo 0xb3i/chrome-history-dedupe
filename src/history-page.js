@@ -5,6 +5,7 @@ import {
   formatHistoryUrlForGroup,
   getHistoryItemPinKey,
   getHistoryItemTitleOverrideKey,
+  getHistoryItemSourceLabel,
   groupHistoryItems,
   getHistoryItemComparator,
   normalizeSortOrder
@@ -44,6 +45,8 @@ import { applySavedTheme, applyTheme, THEME_STORAGE_KEY } from './theme.js';
 
 const SNAPSHOT_RENDER_DEBOUNCE_MS = 50;
 const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+const isMac = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '');
+const RENAMED_ONLY_SHORTCUT = isMac ? '⌘⇧E' : 'Ctrl+Shift+E';
 const historyIndexStore = createHistoryIndexStore();
 
 const form = document.querySelector('#search-form');
@@ -179,9 +182,11 @@ document.querySelector('#result-controls').append(createSortControl());
 initializeViewOptions();
 initializeRowActions();
 initializePrimaryKeyHint();
+initializeRenamedOnlyShortcut();
 renamedOnlyCheckbox.addEventListener('change', () => {
   showRenamedOnly = renamedOnlyCheckbox.checked;
   editedDisplayPreferences.add('renamed');
+  syncRenamedOnlyControl();
   liveSearch.change();
 });
 form.addEventListener('submit', (event) => {
@@ -199,6 +204,31 @@ document.body.append(renameDialog.element);
 document.body.append(groupRenameDialog.element);
 
 init();
+
+function initializeRenamedOnlyShortcut() {
+  document.querySelector('#renamed-only-shortcut').textContent = RENAMED_ONLY_SHORTCUT;
+  renamedOnlyCheckbox.setAttribute('aria-keyshortcuts', isMac ? 'Meta+Shift+E' : 'Control+Shift+E');
+  syncRenamedOnlyControl();
+  document.addEventListener('keydown', (event) => {
+    if (event.defaultPrevented || event.repeat || event.isComposing || event.keyCode === 229
+      || event.key?.toLowerCase() !== 'e' || !event.shiftKey || event.altKey
+      || !(isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey)
+      || document.querySelector('dialog[open]')) return;
+    event.preventDefault();
+    // Keep typing in the search field even if filtering removes the focused row.
+    // Focusing it also closes any open row actions or filter menu.
+    queryInput.focus();
+    renamedOnlyCheckbox.checked = !renamedOnlyCheckbox.checked;
+    renamedOnlyCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+}
+
+function syncRenamedOnlyControl() {
+  renamedOnlyCheckbox.checked = showRenamedOnly;
+  const trigger = document.querySelector('#view-options');
+  trigger.classList.toggle('is-filtered', showRenamedOnly);
+  trigger.title = `${showRenamedOnly ? '仅显示已命名' : '筛选与排序'}（${RENAMED_ONLY_SHORTCUT} 切换）`;
+}
 
 // The filter panel only shapes the result list: renamed-only and sort.
 function initializeViewOptions() {
@@ -232,7 +262,6 @@ document.addEventListener('focusin', (event) => {
 
 function initializeRowActions() {
   if (!actionsPanel) return;
-  const isMac = /Mac|iPhone|iPad/.test(globalThis.navigator?.platform ?? '');
   document.querySelectorAll('[data-mod-key]').forEach((key) => { key.textContent = isMac ? '⌘' : 'Ctrl'; });
   const title = actionsPanel.querySelector('#actions-title');
   const list = actionsPanel.querySelector('#actions-list');
@@ -517,7 +546,7 @@ function renderSummary() {
   const count = summary.querySelector('.result-count');
   const total = currentGroups.reduce((total, group) => total + group.itemCount, 0);
   count.textContent = `${total.toLocaleString('zh-CN')} 条结果`;
-  renamedOnlyCheckbox.checked = showRenamedOnly;
+  syncRenamedOnlyControl();
 }
 
 function renderResults(groups) {
@@ -1074,7 +1103,7 @@ function createRecoveryButton(label, action) {
 function renameItem(item) {
   renameSession.open(item);
   renameDialog.input.value = item.title || item.url || '';
-  renameDialog.url.textContent = item.url || '';
+  renameDialog.url.textContent = getHistoryItemSourceLabel(item);
   renameDialog.url.title = item.url || '';
   renameDialog.status.textContent = '';
   renameDialog.canRestore = Boolean(item.isTitleRenamed);
@@ -1131,6 +1160,7 @@ function renameGroup(group) {
   groupRenameSession.open(group);
   groupRenameDialog.input.value = group.label || group.key || '';
   groupRenameDialog.key.textContent = group.originalLabel || group.key || '';
+  groupRenameDialog.key.title = group.originalLabel || group.key || '';
   groupRenameDialog.status.textContent = '';
   groupRenameDialog.canRestore = Boolean(group.isGroupRenamed);
   groupRenameDialog.element.dataset.initialName = groupRenameDialog.input.value.trim().replace(/\s+/g, ' ');

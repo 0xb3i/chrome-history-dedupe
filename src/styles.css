@@ -1988,6 +1988,11 @@ input {
   fill: #f0f0f1;
 }
 
+.view-options-trigger.is-filtered {
+  color: var(--accent);
+  background: var(--selection-bg);
+}
+
 .popup-body .view-options-trigger:focus-visible {
   outline: none;
   box-shadow: 0 0 0 3px var(--focus-ring);
@@ -2039,6 +2044,11 @@ input {
 
 .popup-body .view-options-panel .rename-filter:hover {
   background: var(--pop-hover);
+}
+
+.popup-body .view-options-panel .rename-filter kbd {
+  margin-left: auto;
+  white-space: nowrap;
 }
 
 .view-option-label {
@@ -2548,8 +2558,7 @@ input {
   }
 }
 
-/* Popup rename sheet: title and address on top, one large field, an action bar
-   that names its keys. Esc cancels and Enter saves through the native dialog. */
+/* Compact rename form shared by the popup and standalone window. */
 .popup-body .rename-dialog {
   width: min(440px, calc(100vw - 48px));
   padding: 0;
@@ -2558,7 +2567,7 @@ input {
   border-radius: 12px;
   background: var(--pop-bg);
   color: var(--pop-text);
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.16), 0 20px 50px -12px rgba(0, 0, 0, 0.32), 0 3px 10px rgba(0, 0, 0, 0.08);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.1);
 }
 
 .popup-body .rename-dialog[open] {
@@ -2589,8 +2598,8 @@ input {
 
 .rename-body .rename-dialog-header,
 .popup-body .rename-dialog-header {
-  gap: 2px;
-  padding: 18px 18px 12px;
+  gap: 4px;
+  padding: 20px 20px 16px;
 }
 
 .rename-body .rename-dialog-header h1,
@@ -2603,7 +2612,7 @@ input {
 
 .rename-body .rename-dialog-url,
 .popup-body .rename-dialog-url {
-  color: var(--pop-tertiary);
+  color: var(--pop-secondary);
   font-size: 12px;
   line-height: 18px;
 }
@@ -2611,7 +2620,7 @@ input {
 .rename-body .rename-dialog-form > .field,
 .popup-body .rename-dialog-form > .field {
   margin: 0;
-  padding: 0 18px 18px;
+  padding: 0 20px 16px;
 }
 
 .rename-body .rename-dialog-form > .field > span,
@@ -2627,11 +2636,11 @@ input {
 .rename-body .rename-dialog-form > .field input,
 .popup-body .rename-dialog-form > .field input {
   min-height: 36px;
-  padding: 0 11px;
-  border: 0;
-  border-radius: 7px;
+  padding: 7px 10px;
+  border: 1px solid var(--line-soft);
+  border-radius: 6px;
   background: #fff;
-  box-shadow: var(--pop-control-shadow);
+  box-shadow: none;
   color: var(--pop-text);
   font-size: 14px;
   line-height: 20px;
@@ -2639,12 +2648,13 @@ input {
 
 .rename-body .rename-dialog-form > .field input:hover,
 .popup-body .rename-dialog-form > .field input:hover {
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.24), 0 1px 1px rgba(0, 0, 0, 0.05);
+  border-color: var(--accent-hover);
 }
 
 .rename-body .rename-dialog-form > .field input:focus,
 .popup-body .rename-dialog-form > .field input:focus {
-  box-shadow: 0 0 0 1px var(--accent), 0 0 0 4px var(--focus-ring);
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--focus-ring);
 }
 
 .rename-body .rename-dialog-form > .field input::selection,
@@ -2655,7 +2665,7 @@ input {
 
 .rename-body .rename-dialog-status,
 .popup-body .rename-dialog-status {
-  margin: -8px 18px 12px;
+  margin: -4px 20px 16px;
   color: var(--pop-secondary);
   font-size: 12px;
 }
@@ -2664,13 +2674,12 @@ input {
   color: var(--danger);
 }
 
-/* Buttons sit on the sheet itself, macOS-alert style: one shape for every
-   button, the default one filled with the accent, restore apart on the left. */
+/* Restore remains separate from the primary actions. */
 .rename-body .rename-dialog-actions,
 .popup-body .rename-dialog-actions {
   gap: 8px;
   margin: 0;
-  padding: 0 18px 16px;
+  padding: 0 20px 20px;
   border: 0;
   background: transparent;
 }
@@ -2682,27 +2691,27 @@ input {
 
 .rename-body .rename-dialog-actions :is(.secondary-button, .primary-button),
 .popup-body .rename-dialog-actions :is(.secondary-button, .primary-button) {
-  min-width: 72px;
-  min-height: 28px;
+  min-width: 58px;
+  min-height: 30px;
   padding: 0 14px;
-  border: 0;
+  border: 1px solid var(--line-soft);
   border-radius: 6px;
   font-size: 13px;
-  font-weight: 500;
+  font-weight: 400;
 }
 
 .rename-body .rename-dialog-actions .secondary-button,
 .popup-body .rename-dialog-actions .secondary-button {
   background: #fff;
-  box-shadow: var(--pop-control-shadow);
+  box-shadow: none;
   color: var(--pop-text);
 }
 
 .rename-body .rename-dialog-actions .secondary-button:hover:not(:disabled),
 .popup-body .rename-dialog-actions .secondary-button:hover:not(:disabled) {
   background: #fff;
-  box-shadow: 0 0 0 0.5px rgba(0, 0, 0, 0.24), 0 1px 2px rgba(0, 0, 0, 0.08);
-  color: var(--pop-text);
+  border-color: var(--accent-hover);
+  color: var(--accent-hover);
 }
 
 .rename-body .rename-dialog-actions .secondary-button:active:not(:disabled),
@@ -2713,7 +2722,8 @@ input {
 .rename-body .rename-dialog-actions .primary-button,
 .popup-body .rename-dialog-actions .primary-button {
   background: var(--accent);
-  box-shadow: inset 0 0.5px 0 rgba(255, 255, 255, 0.22), 0 0 0 0.5px rgba(0, 0, 0, 0.12), 0 1px 1.5px rgba(0, 0, 0, 0.12);
+  border-color: var(--accent);
+  box-shadow: none;
   color: #fff;
 }
 
@@ -2730,7 +2740,7 @@ input {
 
 .rename-body .rename-dialog-actions :is(.secondary-button, .primary-button):disabled,
 .popup-body .rename-dialog-actions :is(.secondary-button, .primary-button):disabled {
-  opacity: 0.4;
+  opacity: 0.5;
   filter: none;
 }
 

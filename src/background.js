@@ -1,6 +1,7 @@
 import {
   getHistoryItemCapturedTitleKey,
   getHistoryItemTitleOverrideKey,
+  getHistoryItemSourceLabel,
   getMeaningfulPageTitle
 } from './history-utils.js';
 import {
@@ -22,7 +23,7 @@ import {
 } from './history-index/protocol.js';
 
 const RENAME_CURRENT_PAGE_COMMAND = 'rename-current-page';
-const RENAME_WINDOW_WIDTH = 480;
+const RENAME_WINDOW_WIDTH = 440;
 // Initial placement only; rename-page fits the final height to its content.
 const RENAME_WINDOW_HEIGHT = 230;
 const INLINE_RENAME_SCRIPT = 'src/rename-overlay.js';
@@ -303,6 +304,7 @@ function notifyHistoryIndexUpdated(update) {
 
 function toInlineRenameDraft(draft) {
   return {
+    sourceLabel: getHistoryItemSourceLabel(draft),
     titleOverrideKey: draft.titleOverrideKey,
     url: draft.url,
     currentTitle: draft.currentTitle,

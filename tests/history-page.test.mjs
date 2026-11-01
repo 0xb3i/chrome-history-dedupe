@@ -60,7 +60,7 @@ function completeDom(window, document) {
   });
 }
 
-async function createPage({ file = 'popup.html', items = [], titles = new Map(), groupNames = new Map(), saved = { query: '', range: 'all' },
+async function createPage({ file = 'popup.html', platform = 'Win32', items = [], titles = new Map(), groupNames = new Map(), saved = { query: '', range: 'all' },
   loadPreferences = async () => saved, loadIndex = async () => ({ revision: 1, pageItems: items }) } = {}) {
   const { window, document } = parseHTML(await readFile(new URL(`../${file}`, import.meta.url), 'utf8'));
   completeDom(window, document);
@@ -80,6 +80,7 @@ async function createPage({ file = 'popup.html', items = [], titles = new Map(),
   });
   const context = vm.createContext({
     ...imports, document, window, Event: window.Event, Map, Set, URL, console,
+    navigator: { platform },
     setTimeout: setTimer, clearTimeout: clearTimer,
     createLiveSearch: (options) => createLiveSearch({ ...options, setTimer, clearTimer }),
     createHistoryIndexStore: () => ({ loadRange: loadIndex }),
@@ -510,7 +511,8 @@ test('⌘K and right-click open the focused row\'s actions: open, copy, rename, 
   assert.equal(panel.hidden, false);
   page.action('重命名网页').click();
   assert.equal(page.one('dialog[open]').getAttribute('aria-label'), '重命名网页');
-  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, items[1].url);
+  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, 'docs.example.org');
+  assert.equal(page.one('dialog[open] .rename-dialog-url').title, items[1].url);
   page.button('取消', page.one('dialog[open]')).click();
 
   page.openActions(second);
@@ -548,7 +550,8 @@ test('same-title links collapse to one row that opens the most visited link; oth
   assert.deepEqual(links.map((link) => link.title), [items[0].url, items[2].url]);
   assert.ok(links.every((link) => /次访问$/.test(link.querySelector('.actions-item-detail').textContent)));
   page.fire(page.document.activeElement, 'keydown', { key: 'F2' });
-  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, items[0].url);
+  assert.equal(page.one('dialog[open] .rename-dialog-url').textContent, 'example.com');
+  assert.equal(page.one('dialog[open] .rename-dialog-url').title, items[0].url);
   page.button('取消', page.one('dialog[open]')).click();
 
   page.openActions(row);
@@ -585,7 +588,8 @@ test('result navigation joins the page, preserves refresh focus, and leaves rena
   assert.equal(dialog.getAttribute('aria-label'), '重命名网页');
   assert.deepEqual([...dialog.querySelector('.rename-primary-actions').children].map((button) => button.textContent),
     ['取消', '保存']);
-  assert.equal(dialog.querySelector('.rename-dialog-url').textContent, items[1].url);
+  assert.equal(dialog.querySelector('.rename-dialog-url').textContent, 'example.com');
+  assert.equal(dialog.querySelector('.rename-dialog-url').title, items[1].url);
   assert.equal(page.fire(query, 'keydown', { key: 'ArrowDown' }).defaultPrevented, false);
 });
 
@@ -762,4 +766,72 @@ test('shared source names intersect with keyword and time filters without replac
   await page.flush();
   page.one('.source-filter-clear').click();
   assert.deepEqual(page.titles(), ['项目 A', '项目 B', '项目 D', '项目 C']);
+});
+
+for (const [platform, modifier, hint, aria] of [
+  ['MacIntel', 'metaKey', '⌘⇧E', 'Meta+Shift+E'],
+  ['Win32', 'ctrlKey', 'Ctrl+Shift+E', 'Control+Shift+E']
+]) {
+  test(`renamed-only shortcut toggles and persists while keeping other filters on ${platform}`, async () => {
+    const named = pageItem('原名', 'named');
+    const ordinary = pageItem('项目乙', 'ordinary');
+    const other = pageItem('项目外站', 'other', { url: 'https://other.example/a', dedupeKey: 'other' });
+    const titles = new Map([[named.dedupeKey, { title: '项目甲', targetUrl: named.url, updatedAt: now }]]);
+    const page = await createPage({ platform, items: [named, ordinary, other], titles,
+      saved: { query: '项目', range: 'week', sortOrder: 'name' } });
+    page.all('.result-host').find((host) => host.dataset.groupKey === 'example.com').click();
+    const before = page.titles();
+    const key = { key: 'E', [modifier]: true, shiftKey: true };
+    assert.equal(page.one('#renamed-only-shortcut').textContent, hint);
+    assert.equal(page.one('#renamed-only').getAttribute('aria-keyshortcuts'), aria);
+    page.one('#view-options').click();
+    assert.equal(page.fire(page.one('#renamed-only'), 'keydown', key).defaultPrevented, true);
+    await settle();
+    assert.deepEqual(page.titles(), ['项目甲']);
+    assert.equal(page.one('#renamed-only').checked, true);
+    assert.equal(page.one('#view-options').classList.contains('is-filtered'), true);
+    assert.equal(page.one('#view-options-panel').hidden, true);
+    assert.equal(page.document.activeElement, page.one('#query'));
+    assert.equal(page.one('#query').value, '项目');
+    assert.equal(page.one('#range').value, 'week');
+    assert.equal(page.one('#sort-order').value, 'name');
+    assert.equal(page.one('.source-filter-name').textContent, 'example.com');
+    assert.equal(page.writes.at(-1).showRenamedOnly, true);
+    page.fire(page.one('#query'), 'keydown', key);
+    await settle();
+    assert.deepEqual(page.titles(), before);
+    assert.equal(page.one('#renamed-only').checked, false);
+    assert.equal(page.one('#view-options').classList.contains('is-filtered'), false);
+    assert.equal(page.writes.at(-1).showRenamedOnly, false);
+  });
+}
+
+test('renamed-only shortcut ignores IME, held keys, extra modifiers and rename dialogs', async () => {
+  const page = await createPage({ items: [pageItem('页面', 'a')] });
+  const key = { key: 'e', ctrlKey: true, shiftKey: true };
+  for (const extras of [{ isComposing: true }, { keyCode: 229 }, { repeat: true },
+    { altKey: true }, { metaKey: true }, { shiftKey: false }, { ctrlKey: false }, { key: 'r' }]) {
+    assert.equal(page.fire(page.one('#query'), 'keydown', { ...key, ...extras }).defaultPrevented, false);
+    assert.equal(page.one('#renamed-only').checked, false);
+  }
+  page.openActions(page.one('.result-item'));
+  page.action('重命名网页').click();
+  const input = page.one('dialog[open] input');
+  const value = input.value;
+  assert.equal(page.fire(input, 'keydown', key).defaultPrevented, false);
+  assert.equal(input.value, value);
+  assert.equal(page.document.activeElement, input);
+  assert.equal(page.one('#renamed-only').checked, false);
+});
+
+test('renamed-only shortcut selected during initialization survives late saved preferences', async () => {
+  const preferences = deferred();
+  const page = await createPage({ items: [pageItem('页面', 'a')], loadPreferences: () => preferences.promise });
+  page.fire(page.one('#query'), 'keydown', { key: 'e', ctrlKey: true, shiftKey: true });
+  await settle();
+  preferences.resolve({ query: '', range: 'all', showRenamedOnly: false });
+  await settle();
+  assert.equal(page.one('#renamed-only').checked, true);
+  assert.equal(page.one('#view-options').classList.contains('is-filtered'), true);
+  assert.equal(page.writes.at(-1).showRenamedOnly, true);
 });
