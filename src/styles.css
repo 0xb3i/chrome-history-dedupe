@@ -1189,13 +1189,14 @@ independent of result type or source. */
   gap: 8px;
 }
 
+/* Chrome owns the popup window outline. Fill its viewport without a second
+   rounded clip, which would expose the host's white backing at the corners. */
 .popup-root {
   width: 580px;
   min-width: 580px;
   min-height: 0;
   overflow: hidden;
-  border-radius: 18px;
-  background: transparent;
+  background: var(--bg);
 }
 
 .popup-body {
@@ -1205,8 +1206,6 @@ independent of result type or source. */
   max-height: 560px;
   overflow-x: hidden;
   overflow-y: hidden;
-  border-radius: 18px;
-  clip-path: inset(0 round 18px);
   background: var(--bg);
 }
 
@@ -1216,7 +1215,6 @@ independent of result type or source. */
   max-height: 560px;
   width: 100%;
   max-width: 100%;
-  border-radius: 18px;
   padding: 36px 16px 12px;
 }
 
