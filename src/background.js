@@ -23,6 +23,7 @@ import {
 
 const RENAME_CURRENT_PAGE_COMMAND = 'rename-current-page';
 const RENAME_WINDOW_WIDTH = 480;
+// Initial placement only; rename-page fits the final height to its content.
 const RENAME_WINDOW_HEIGHT = 230;
 const INLINE_RENAME_SCRIPT = 'src/rename-overlay.js';
 const INLINE_RENAME_INIT_MESSAGE = 'deduped-history:init-inline-rename';

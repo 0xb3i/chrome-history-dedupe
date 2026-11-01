@@ -5,6 +5,7 @@ import {
   loadTitleOverrides,
   saveTitleOverride
 } from './storage.js';
+import { observeContentWindowHeight } from './window-placement.js';
 
 const form = document.querySelector('#rename-form');
 const titleInput = document.querySelector('#rename-title');
@@ -12,6 +13,9 @@ const statusLabel = document.querySelector('#rename-status');
 const urlLabel = document.querySelector('#rename-url');
 const cancelButton = document.querySelector('#cancel-button');
 const restoreButton = document.querySelector('#restore-button');
+
+const stopFittingWindow = observeContentWindowHeight(form);
+globalThis.addEventListener('pagehide', stopFittingWindow, { once: true });
 
 globalThis.chrome?.storage?.local?.get?.('history-ui-color', (saved) => {
   if (['blue', 'orange', 'green', 'neutral'].includes(saved?.['history-ui-color'])) {
