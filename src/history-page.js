@@ -908,10 +908,13 @@ function createRenameDialogShell({
 
 function createPinIcon() {
   const icon = createBaseIcon();
+  // Match the renamed tag: 16-unit canvas, 10.5-unit outline and 1.4-unit stroke.
+  icon.setAttribute('viewBox', '0 0 16 16');
+  icon.setAttribute('stroke-width', '1.4');
 
   for (const pathData of [
-    'M12 17v5',
-    'M9 10.8a2 2 0 0 1-1.1 1.8l-1.8.9A2 2 0 0 0 5 15.3V16h14v-.7a2 2 0 0 0-1.1-1.8l-1.8-.9a2 2 0 0 1-1.1-1.8V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z'
+    'M8 9.75v3.5',
+    'M5.75 7V5.25H5a1.25 1.25 0 0 1 0-2.5h6a1.25 1.25 0 0 1 0 2.5h-.75V7l3 2.75H2.75z'
   ]) {
     const path = document.createElementNS(SVG_NAMESPACE, 'path');
     path.setAttribute('d', pathData);
