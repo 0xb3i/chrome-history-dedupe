@@ -55,18 +55,16 @@
       <section class="settings-group" aria-labelledby="shortcut-heading">
         <h2 id="shortcut-heading">快捷键</h2>
         <div class="settings-card">
-          <div class="settings-row">
-            <div>
-              <p class="settings-row-title">打开搜索</p>
-              <p class="settings-row-detail" data-shortcut-command="_execute_action" role="status">正在读取…</p>
-            </div>
-            <button class="secondary-button" id="shortcut-settings" type="button">在 Chrome 中修改…</button>
+          <div class="settings-row settings-shortcut-row">
+            <p class="settings-row-title" id="search-shortcut-label">打开搜索</p>
+            <p class="settings-row-detail settings-shortcut-value" data-shortcut-command="_execute_action" role="status" aria-labelledby="search-shortcut-label">正在读取…</p>
           </div>
-          <div class="settings-row">
-            <div>
-              <p class="settings-row-title">重命名当前网页</p>
-              <p class="settings-row-detail" data-shortcut-command="rename-current-page" role="status">正在读取…</p>
-            </div>
+          <div class="settings-row settings-shortcut-row">
+            <p class="settings-row-title" id="rename-shortcut-label">重命名当前网页</p>
+            <p class="settings-row-detail settings-shortcut-value" data-shortcut-command="rename-current-page" role="status" aria-labelledby="rename-shortcut-label">正在读取…</p>
+          </div>
+          <div class="settings-card-actions">
+            <button class="secondary-button" id="shortcut-settings" type="button">在 Chrome 中修改快捷键</button>
           </div>
         </div>
       </section>
