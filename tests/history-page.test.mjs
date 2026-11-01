@@ -677,3 +677,89 @@ test('source filtering preserves search conditions and clearing restores other s
     assert.equal(page.one('.source-filter-bar').hidden, true);
   }
 });
+
+for (const entry of ['badge', 'actions']) {
+  test(`${entry} source filter includes every domain with the selected display name`, async () => {
+    const item = (title, host, visits) => {
+      const url = `https://${host}/document`;
+      return pageItem(title, '', { url, dedupeKey: url, totalVisitCount: visits });
+    };
+    const items = [item('页面 A', 'a.example', 30), item('页面 B', 'b.example', 10),
+      item('页面 C', 'c.example', 20), item('其他页面', 'other.example', 40)];
+    const groupNames = new Map(['a.example', 'b.example', 'c.example'].map((host) => [host, '飞书云文档']));
+    const page = await createPage({ items, groupNames });
+    const urls = () => page.all('.result-title').map((link) => link.href);
+    for (const host of groupNames.keys()) {
+      const badge = page.all('.result-host').find((node) => node.dataset.groupKey === host);
+      if (entry === 'badge') badge.click();
+      else {
+        page.openActions(badge.closest('.result-item'));
+        page.action('只看此来源').click();
+      }
+      assert.deepEqual(urls(), [items[0].url, items[2].url, items[1].url]);
+      assert.equal(page.one('.source-filter-name').textContent, '飞书云文档');
+      page.all('.result-title')[1].click();
+      assert.equal(page.opened.at(-1), items[2].url);
+      page.one('.source-filter-clear').click();
+      assert.deepEqual(urls(), [items[3].url, items[0].url, items[2].url, items[1].url]);
+    }
+    page.all('.result-host').find((node) => node.dataset.groupKey === 'other.example').click();
+    assert.deepEqual(urls(), [items[3].url]);
+    assert.equal(page.one('.source-filter-name').textContent, 'other.example');
+  });
+}
+
+test('active source name keeps its meaning as domains are renamed or restored', async () => {
+  const hosts = ['a.example', 'b.example', 'c.example'];
+  const items = hosts.map((host, index) => {
+    const url = `https://${host}/document`;
+    return pageItem(`页面 ${index}`, '', { url, dedupeKey: url, totalVisitCount: 3 - index });
+  });
+  const page = await createPage({ items, groupNames: new Map([
+    ['a.example', '飞书云文档'], ['b.example', '飞书云文档'], ['c.example', '其他文档']
+  ]) });
+  page.all('.result-host').find((node) => node.dataset.groupKey === 'a.example').click();
+  const urls = () => page.all('.result-title').map((link) => link.href);
+  assert.deepEqual(urls(), [items[0].url, items[1].url]);
+
+  // The clicked domain leaves the name while a different domain joins it.
+  page.storageChanged({ [imports.GROUP_NAME_OVERRIDES_STORAGE_KEY]: { newValue: {
+    'a.example': '个人文档', 'b.example': '飞书云文档', 'c.example': '飞书云文档'
+  } } });
+  await page.flush();
+  assert.deepEqual(urls(), [items[1].url, items[2].url]);
+  assert.equal(page.one('.source-filter-name').textContent, '飞书云文档');
+
+  page.storageChanged({ [imports.GROUP_NAME_OVERRIDES_STORAGE_KEY]: { newValue: {} } });
+  await page.flush();
+  assert.deepEqual(urls(), []);
+  assert.equal(page.one('.source-filter-name').textContent, '飞书云文档');
+  page.one('.source-filter-clear').click();
+  assert.deepEqual(urls(), items.map((item) => item.url));
+});
+
+test('shared source names intersect with keyword and time filters without replacing them', async () => {
+  const item = (title, host, age = 0) => {
+    const url = `https://${host}/${encodeURIComponent(title)}`;
+    return pageItem(title, '', { url, dedupeKey: url, lastVisitTime: now - age * day });
+  };
+  const items = [item('项目 A', 'a.example'), item('项目 B', 'b.example'),
+    item('项目 C', 'c.example', 10), item('其他页面', 'b.example'), item('项目 D', 'other.example')];
+  const page = await createPage({ items, saved: { query: '项目', range: 'day' },
+    groupNames: new Map(['a.example', 'b.example', 'c.example'].map((host) => [host, '飞书云文档'])) });
+  page.all('.result-host').find((node) => node.dataset.groupKey === 'a.example').click();
+  assert.deepEqual(page.titles(), ['项目 A', '项目 B']);
+  assert.equal(page.one('#query').value, '项目');
+  assert.equal(page.one('#range').value, 'day');
+
+  await page.changeRange('all');
+  assert.deepEqual(page.titles(), ['项目 A', '项目 B', '项目 C']);
+  page.input('其他');
+  await page.flush();
+  assert.deepEqual(page.titles(), ['其他页面']);
+  assert.equal(page.one('.source-filter-name').textContent, '飞书云文档');
+  page.input('项目');
+  await page.flush();
+  page.one('.source-filter-clear').click();
+  assert.deepEqual(page.titles(), ['项目 A', '项目 B', '项目 D', '项目 C']);
+});

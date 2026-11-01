@@ -72,6 +72,8 @@ const resultNavigation = createResultNavigation({
     || !actionsPanel?.hidden
 });
 let currentGroups = [];
+// A source filter selects a visible name, so independently named domains can
+// share the selection without changing their underlying identity or actions.
 let sourceFilter = null;
 const sourceFilterBar = document.createElement('div');
 sourceFilterBar.className = 'source-filter-bar';
@@ -290,7 +292,7 @@ function initializeRowActions() {
   };
   const showMain = () => {
     const { item, groupKey, members } = current;
-    const label = groupNameOverrides.get(groupKey) || groupKey;
+    const label = getSourceLabel(groupKey);
     const others = members.length - 1;
     show(item.title || item.url || '(无标题)', [
       menuItem('打开', '↵', () => openLink(item.url)),
@@ -306,7 +308,7 @@ function initializeRowActions() {
       ...(others > 0 ? [menuItem('同名的其他链接', String(others), showLinks)] : []),
       menuItem('只看此来源', label, () => {
         close({ restoreFocus: false });
-        sourceFilter = groupKey;
+        sourceFilter = label;
         renderHistorySnapshot();
         queryInput.focus();
       }),
@@ -448,7 +450,7 @@ function renderHistorySnapshot() {
   const { query, matchedItems } = searchSnapshot;
   const visibleItems = showRenamedOnly ? matchedItems.filter((item) => item.isTitleRenamed) : matchedItems;
   const groups = groupHistoryItems(visibleItems, sortOrder);
-  currentGroups = sourceFilter ? groups.filter((group) => group.key === sourceFilter) : groups;
+  currentGroups = sourceFilter ? groups.filter((group) => getSourceLabel(group.key) === sourceFilter) : groups;
   renderSourceFilter();
   const conditions = JSON.stringify([query, searchSnapshot.range, showRenamedOnly, sortOrder, sourceFilter]);
   if (conditions !== renderedConditions) resultLimit = RESULT_PAGE_SIZE;
@@ -690,11 +692,15 @@ function appendMatchReason(title, item) {
   title.title = `${title.title}\n曾用名：${aliases.map((alias) => alias.text).join('；')}`;
 }
 
+function getSourceLabel(groupKey) {
+  return groupNameOverrides.get(groupKey) || groupKey;
+}
+
 function renderSourceFilter() {
   sourceFilterBar.replaceChildren();
   sourceFilterBar.hidden = !sourceFilter;
   if (!sourceFilter) return;
-  const label = groupNameOverrides.get(sourceFilter) || sourceFilter;
+  const label = sourceFilter;
   const caption = document.createElement('span');
   caption.className = 'source-filter-caption';
   caption.textContent = '来源：';
@@ -723,7 +729,7 @@ function renderSourceFilter() {
 function createResultHost(groupKey, pageUrl) {
   const host = document.createElement('button');
   host.className = 'result-host';
-  const label = groupNameOverrides.get(groupKey) || groupKey;
+  const label = getSourceLabel(groupKey);
   // Keep source colors stable across sorting, filtering and custom group names.
   let hash = 0;
   for (const character of groupKey) hash = (Math.imul(hash, 31) + character.codePointAt(0)) >>> 0;
@@ -737,7 +743,7 @@ function createResultHost(groupKey, pageUrl) {
   host.addEventListener('click', (event) => {
     event.preventDefault();
     event.stopPropagation();
-    sourceFilter = groupKey;
+    sourceFilter = label;
     renderHistorySnapshot();
     sourceFilterBar.querySelector('button')?.focus();
   });
