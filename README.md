@@ -1,132 +1,97 @@
-# 喵迹
+<p align="center">
+  <img src="icons/cat-128.png" width="88" height="88" alt="喵迹的小猫图标">
+</p>
+<h1 align="center">喵迹</h1>
+<p align="center">找回看过的页面，少一点重复，多一点清爽。</p>
+<p align="center">
+  <img src="https://img.shields.io/github/manifest-json/v/0xb3i/chrome-history-dedupe?color=1677ff&amp;label=version" alt="当前版本">
+  <img src="https://img.shields.io/badge/Chrome-105%2B-4285F4?logo=googlechrome&amp;logoColor=white" alt="Chrome 105 及以上">
+</p>
+<p align="center">
+  <a href="#快速开始">快速开始</a>&nbsp;&nbsp;
+  <a href="#快捷键">快捷键</a>&nbsp;&nbsp;
+  <a href="#数据与备份">数据与备份</a>&nbsp;&nbsp;
+  <a href="https://github.com/0xb3i/chrome-history-dedupe/issues">反馈问题</a>
+</p>
 
-找回看过的页面，少一点重复，多一点清爽。
+喵迹是一款 Chrome 历史记录搜索扩展。按下快捷键，用记得的标题或曾用名找回页面，自动归并重复链接，也能给常用页面改名、固定。
 
-## 1.11.16 正式版
+<p align="center">
+  <img src="docs/images/search.png" width="680" alt="喵迹搜索公开 CSS 文档，显示命中高亮、来源和访问时间">
+</p>
 
-搜索弹窗及共用样式的重命名面板底色提亮为纯白 `#ffffff`，底栏保持无灰色叠层；来源、时间使用较深的文字色 `#6e6e73`，选中态保持原样。
+## 功能
 
-扩展更名为「喵迹」，简介为「找回看过的页面，少一点重复，多一点清爽。」；扩展管理页、工具栏提示、设置页及弹窗标题同步更新。
+- **标题与曾用名搜索**：输入即搜索，关键词高亮；记不清当前标题时，也可以试试页面以前的名字。
+- **减少重复结果**：同一页面的重复 URL 自动归并，同一来源的同名页面折叠展示，其他链接可在操作面板中查看。
+- **重命名与固定**：为页面起一个好记的名字，把常用页面固定到结果顶部。
+- **筛选与排序**：按时间、来源或是否已命名筛选，支持综合排序、访问最多、最近访问和名称排序。
+- **键盘操作**：方向键选择结果，回车打开；通过操作面板完成重命名、固定、复制链接等操作。
 
-独立重命名窗口根据表单实际高度自动收紧，消除按钮下方多余空白；错误提示出现时自动增高，并适配浏览器缩放与系统标题栏高度。
+<details>
+<summary>查看操作面板</summary>
 
-设置页快捷键改为名称与按键左右对齐的独立行，公共修改入口置于整组底部；主题色下拉框与按钮统一使用中等字重。
+选中结果后按 ⌘K / Ctrl+K，或右键点击结果。
 
-独立重命名窗口复用搜索弹窗的表单布局，内容按实际窗口宽度排版，统一标题、输入框和操作按钮的边距。
+<p align="center">
+  <img src="docs/images/actions.png" width="680" alt="喵迹操作面板，可打开页面、复制链接、重命名、固定和按来源筛选">
+</p>
 
-设置页分别显示 Chrome 当前生效的搜索与重命名快捷键，返回页面时自动更新；未绑定时显示「未设置」，不再展示写死的默认值。
+</details>
 
-恢复微软 Fluent Emoji 的原始橙色小猫图标，工具栏、扩展管理页、设置页及标签页同步使用。
+## 快速开始
 
-小猫图标统一覆盖工具栏固定入口、扩展菜单、Chrome 扩展管理页、设置页及扩展页面的标签页图标；使用明确的小猫资源路径，避免沿用旧图标地址。
+需要 **Chrome 105 或更新版本**。直接加载项目目录即可使用，无需构建或安装 Node.js。
 
-统一已命名与已固定图标的轮廓宽度及描边，修复图钉偏窄、偏细的问题。
+1. [下载 ZIP](https://github.com/0xb3i/chrome-history-dedupe/archive/refs/heads/main.zip) 并解压到固定目录，也可以使用 Git：
 
-设置入口简化为「设置」，扩展图标换为微软 Fluent Emoji 的原始橙色小猫头像。
+   ```bash
+   git clone https://github.com/0xb3i/chrome-history-dedupe.git
+   ```
 
-已命名与已固定状态支持同时显示，各自保持固定位置；统一图标尺寸并垂直居中。
+2. 打开 `chrome://extensions`，开启右上角的「开发者模式」。
+3. 点击「加载已解压的扩展程序」，选择包含 `manifest.json` 的项目根目录。
+4. 将「喵迹」固定到工具栏，点击小猫图标，或按下方快捷键开始搜索。
 
-修复弹窗外层重复圆角裁剪导致底栏边角露出白色底的问题，窗口外轮廓交由 Chrome 处理。
+首次打开时会建立本地搜索索引，历史记录较多时需要稍等。Chrome 原生历史记录页面仍可正常使用。
 
-快捷键弹窗改为 Raycast 式启动器，扩展只剩这一个搜索入口：不再接管 `chrome://history`，完整历史页已移除，按 Command + Y 回到 Chrome 原生历史记录。
+**更新**：在原目录更新文件，再到 `chrome://extensions` 点击「重新加载」。使用 Git 安装时，先在项目目录运行 `git pull`。
 
-- **搜索行**：无边框大搜索框，右侧是时间筛选和「筛选与排序」按钮。按钮里只有仅显示已命名、排序，以及一个「设置」入口。
-- **结果行**：每行 40px、只占一行，固定列：网站图标、标题（过长省略）、来源名称、时间、状态图标（固定为图钉，已命名为标签）。行上不再有悬停按钮。
-- **⌘K 操作面板**：⌘K（其他平台 Ctrl+K）或右键某一行，打开这一行的操作：打开、复制链接、重命名网页、固定到顶部、同名的其他链接、只看此来源、修改来源名称。↑↓ 选择，↵ 执行，Esc 关闭。
-- **同名链接**：只在 ⌘K →「同名的其他链接」里出现，按最近访问排列，显示访问时间和次数，最多 50 条；路径不在列表里显示，悬停可看完整地址。显示分组不改变资源身份。
-- **时间分组**：按「最近访问」排序时按已固定、今天、昨天、本周、月份分段；其他排序保持不分段的相关度列表。
-- **曾用名**：仍参与搜索，结果里不单独占一行，悬停标题可查看。已命名页面不受时间筛选限制，不额外标注。
-- **命中高亮**：浅黄底加深黄下划线。
-- **底部栏**：左侧结果数量，右侧随焦点提示下一步按键（↓ 选择 / ↵ 打开）和 ⌘K 操作。
-- **改名面板**：一体化输入框，底部「还原原名｜取消 esc｜保存 ↵」。
-- **设置页**：备份与恢复、主题色、快捷键入口在扩展的「选项」页（扩展管理页的「扩展程序选项」，或「筛选与排序」里的「设置」）。
-- **图标**：采用 [Iconify 收录的 Fluent Emoji Flat 小猫头像](https://icon-sets.iconify.design/fluent-emoji-flat/cat-face/)，原作者为 Microsoft Corporation。保留[上游 SVG 原稿](https://github.com/microsoft/fluentui-emoji/blob/e8a613a0baedbca8f144fa70950714f2583318a8/assets/Cat%20face/Flat/cat_face_flat.svg)作为 `icons/cat.svg`，不修改原始配色、轮廓和造型，使用 `rsvg-convert` 导出 16/32/48/128px PNG。素材使用 MIT 许可证，完整版权与许可文本见 [icons/LICENSE](icons/LICENSE)。
+## 快捷键
 
-搜索框内选中的文字使用低饱和浅色背景，保留深色文字；选区比普通匹配高亮略深，兼顾辨识度与轻量风格。四种主题分别使用浅蓝、浅杏、浅绿和灰紫选区，弹窗与完整页共用；搜索框边框保持原有样式。
+| 操作 | macOS | Windows / Linux |
+| --- | --- | --- |
+| 打开搜索 | Option + S | Alt + S |
+| 重命名当前网页 | Option + Shift + S | Alt + Shift + S |
+| 打开结果的操作面板 | ⌘ + K | Ctrl + K |
+| 选择结果 | ↑ / ↓ | ↑ / ↓ |
+| 打开选中的页面 | Enter | Enter |
 
-完整页页头使用 22px 标题与紧凑工具组：备份、恢复以图标文字按钮成组展示，主题和快捷键统一为 32px 轻描边控件，版本号位于右侧末尾。日期分组使用 18px 半粗标题，星期使用 14px 次级文字，拉开分组与结果的阅读层级；保留现有主题配色与圆角。
+前两项是默认建议值，可在 `chrome://extensions/shortcuts` 修改。喵迹设置页会显示实际生效的快捷键。
 
-完整页与弹窗统一使用全宽即时搜索、同排筛选与排序，以及标题在上、来源信息和操作在下的紧凑结果行。完整页保留日期与访问时刻，以留白代替日期色块；备份、恢复、主题和快捷键入口使用轻量工具栏样式。
+## 数据与备份
 
-移除子链接查找框，展开区直接显示链接列表。
+- **本地保存**：历史搜索索引、页面名称和固定状态保存在本机，不上传、不跨设备同步。
+- **保留原始历史**：去重只影响结果展示，不删除 Chrome 历史记录；扩展不在无痕模式中运行。
+- **重命名的范围**：已命名页面不受时间筛选限制，但仍需要对应页面存在于 Chrome 历史中。
 
-子链接行高统一为 54px，预留两行文字空间，不随参数有无或文本长度变化。
+在搜索面板打开「筛选与排序」→「设置」，使用「导出」或「恢复」管理备份。备份包含页面名称、来源名称、固定状态和自动采集的标题，不包含 Chrome 原始历史。
 
-无独立标题的子链接统一显示路径和参数，最多两行；每批显示 8 条，通过「显示更多链接」继续浏览。
+移动加载目录、卸载或重新安装扩展前，请先导出备份，避免扩展 ID 变化后无法访问原有本地数据。
 
-展开链接采用紧凑布局：标题、访问次数和操作按钮同排，参数在标题下方；缩小上下留白和链接间距。
+## 开发与贡献
 
-来源筛选改为轻量文字状态，搭配独立关闭按钮；长来源名自动省略，悬停可查看全名。
-
-来源使用 Chrome 提供的网站图标，加载失败回退为稳定色点；弹窗行间距略微收紧，「已命名」状态使用更小字号。
-
-重命名界面统一为紧凑布局：网址单行省略、还原原名位于左下，取消和保存位于右下；未修改名称时禁用保存，无自定义名称时隐藏还原入口。
-
-正式版包含历史搜索与资源去重、弹窗分组与完整页时间线、重命名与置顶、备份恢复和本地后台索引。v1.10.6 默认使用完整浅蓝主题，弹窗和完整页统一使用纯白底，不使用渐变，搜索框和交互色块保持轻量，主题统一覆盖列表交互态、文字、边框、菜单、来源色点及交互高亮，提供蓝色、暖橙、绿色和中性四种完整浅色主题，选择会保存在扩展存储中，快捷键重命名浮层与独立重命名窗口共用主题；弹窗底部及完整页顶部可切换。界面采用 Raycast 风格的浅色启动器界面：弹窗直接从搜索框开始，完整页入口位于底部右侧；结果行标题与小号「已命名」状态位于上行，来源、访问次数与相对时间位于左下；今天显示时刻、昨天显示「昨天」、近一周显示星期、更早显示日期，悬停查看完整时间，改名、固定及链接数量位于右下；配合整行焦点反馈，底部只保留主题与完整页入口，延续 v1.1.0 的搜索和键盘操作。
-
-- **运行环境：** Chrome 105 及以上；扩展不在无痕模式中运行。直接加载项目目录即可使用，无需构建或安装 Node.js。
-- **升级方式：** 在原目录更新文件，在 `chrome://extensions` 点击「重新加载」，重新打开搜索弹窗，确认扩展管理页显示 `v1.11.16`。旧版用户数据沿用现有迁移流程；移动目录或重新安装前按下文导出备份。
-- **首次使用：** 后台需要读取 Chrome 历史并建立索引；历史较多时初始化需要时间。之后关键词搜索使用本地索引。
-- **数据边界：** 去重只影响展示，不删除 Chrome 原始历史。重命名页面仍依赖浏览器保留对应历史；备份不包含原始历史。扩展不上传数据，也不提供跨设备同步。
-
-## Install
-
-1. Open `chrome://extensions`.
-2. Enable `Developer mode`.
-3. Click `Load unpacked`.
-4. Select the directory containing this project’s `manifest.json`.
-
-After loading, open the popup with the toolbar button or the shortcut below. Chrome's native `chrome://history` page is left unchanged.
-
-## Shortcut
-
-The extension suggests `Option+S` on macOS and `Alt+S` on other platforms to open the popup search panel. It also suggests `Option+Shift+S` on macOS and `Alt+Shift+S` elsewhere to rename the current page inside the extension. Chrome lets you change or clear shortcuts at `chrome://extensions/shortcuts`.
-
-The popup supports 24-hour, 7-day, 30-day, 90-day, and all-history searches and remembers the last search term, time filter, and renamed-pages filter, so reopening it with the shortcut returns to the same search context. A background index keeps committed search data ready before the popup opens, so keyword searches never wait for Chrome's History API.
-
-The rename shortcut opens an inline dialog on the active page. Restricted pages fall back to a popup centered over the active Chrome window. Rename saves acknowledge durable storage immediately; background indexing does not block the dialog.
-
-## 行为与架构
-
-搜索框独占主操作行；时间筛选与「仅已命名」复选框集中在下方。筛选与排序即时生效，次级操作使用轻量样式。
-
-弹窗搜索区固定在顶部，结果区独立滚动。 时间与命名筛选位于搜索框下方左侧，排序位于同一行右侧；结果数单独位于列表上方。输入后自动搜索，Enter 仍提交查询；按 ↓ 进入结果，↑/↓ 移动，聚焦链接后 Enter 打开，Esc 返回搜索框。折叠分组内的链接不会参与导航。后台更新保留当前资源的焦点与滚动位置。默认隐藏普通网址路径，区分同名链接所需的路径始终可见。各改名入口展示目标地址与处理中状态。
-
-弹窗的同名分组在展开时才生成子链接与地址说明，每次加载 8 条；继续加载会追加内容，后台刷新保留已展开的数量，避免打开弹窗时生成大量不可见节点。展开区外围延续页面背景，用留白和缩进连接父行与白色子列表，子列表保留极轻中性边框，行间用留白分隔，子行悬停与聚焦底色使用 6px 圆角，访问次数位于左下，改名与固定按钮统一位于右下，路径与必要参数分层显示。子链接优先显示已有且不同于分组名的页面标题，下方显示简化 URL；没有可用标题时回退为路径与参数，不使用无对应关系的搜索曾用名。地址省略公共协议与域名，路径与参数分两行，参数使用小字号，超长内容单行省略，悬停可查看完整地址，保留路径、查询参数和片段，不再翻译参数名或展示字段说明；不同来源保留协议与域名，凭证值隐藏。已固定状态使用标题左侧的次级色小图钉表示，已重命名状态使用标题末尾的小号「自定义」文字表示，悬停可查看说明；所有结果行的改名与置顶按钮仅在悬停当前行或键盘聚焦时显现，触摸设备保持可见。
-
-标题或曾用名含搜索命中时最多显示三行；过长内容截取首个命中词附近的摘要，避免长 URL 撑满列表。完整标题和曾用名可悬停查看，实际打开地址保持完整。时间筛选与排序共用 Ant 风格自绘下拉菜单，支持键盘选择；搜索与结果工具栏统一使用 14px 常规字重、32px 控件高度和 6px 圆角。
-
-- **资源身份**：独立资源分别保留。未知网址保留完整路径、非跟踪查询参数和 fragment，不再按“第一个像 ID 的片段”截断。飞书官方域上的同类型文档 token 可跨租户域归并；字节云 MCP server 的 `tools` / `inspector` 合并为同一资源。表格子资源参数保持独立。Google 搜索保留 `q`，忽略分页和辅助参数。
-- **导航别名**：只有浏览器确认的同一次主框架服务器重定向才建立别名。取消加载、切换地址、SPA 和无法明确归属的导航不会推断成同一页面。旧版本未经验证的跳转关系不再参与归并。
-- **代表链接与统计**：以完整历史归并资源，再按所选时间筛选最近访问的资源。默认链接由规范化 URL 的累计访问次数、最近访问和稳定键选出；手动重命名保留用户指定的目标链接。
-- **重命名**：名称、目标链接、更新时间独立保存，即时更新显示与搜索。已重命名页面不受时间筛选限制，但只有对应资源仍存在于 Chrome 历史中才显示。它不是独立书签库。旧名称按保存的目标链接迁移到具体资源。
-- **结果组织与排序**：弹窗每批显示 30 项，同一域名下未重命名、未置顶的同名结果合并为一行，打开访问最多的链接，其余在 ⌘K 里按时间列出。默认按置顶、搜索匹配、重命名、次数和最近访问排序；也可选点击次数、最近访问和名称排序，名称支持中文及自然数字顺序。按最近访问排序时按已固定、今天、昨天、本周、月份分段。所有排序保留置顶顺序，切换排序不重新读取历史。来源名称优先显示自定义分组名；点击来源名称或 ⌘K →「只看此来源」筛选该网站，通过列表上方的来源标签清除筛选；⌘K →「修改来源名称」、右键来源名称或聚焦后按 F2 可修改分组名。
-- **同名链接**：只在 ⌘K →「同名的其他链接」里出现，按最近访问排列，显示访问时间和次数，最多 50 条；路径不在列表里显示，悬停可看完整地址。显示分组不改变资源身份。
-- **筛选与反馈**：「仅显示已命名」是结果筛选，位于「筛选与排序」面板。结果数量显示在底部栏左侧。已命名页面不受时间范围限制，不额外标注。无结果时提供扩大时间范围、清除筛选、清空关键词等适用操作，读取失败可以重试，操作失败显示可见提示。
-- **即时搜索**：输入停顿 180ms 后搜索，中文输入法组合期间不提交，时间和命名筛选即选即生效。输入草稿与已提交条件仍独立，后台刷新使用已提交条件，旧请求不能覆盖新请求或较新的索引；初始化也不会覆盖用户刚修改的筛选偏好。显示标题中的命中内容高亮；命中历史名称（曾用名）时结果照常出现，曾用名只在标题悬停提示中显示。搜索只匹配标题（含归并成员的标题），仍打开资源的稳定代表链接；中文支持有界简称匹配。
-- **标题来源**：显示优先采用自定义名称，其次有效的实时捕获标题、Chrome 历史标题，最后才显示 URL。URL 和明确的加载占位文字不会覆盖有效名称；同一资源的代表链接缺少名称时使用其他成员的有效标题，不改变代表链接与访问统计。缺少实时捕获记录不会把历史名称变成「曾用名」；搜索命中与当前名称不同的历史名称时，才在标题悬停提示里列出。最多保存 5,000 条实时标题记录。
-
-后台保留原始历史，并以原子 generation 发布可重建的派生索引。每轮构建只执行一次全量资源归并，仅持久化一份完整资源索引，前台在该索引上按最近访问时间过滤，切换时间无需重建索引。重命名直接更新用户数据投影，不触发全量索引重建；前台关键词搜索不访问 History API。索引写入和回收由 Web Locks 协调，失败或 Worker 终止留下的未发布分片会安全回收。
-
-核心边界：`page-identity.js` 负责身份；`history-utils.js` 负责事实归并与统一排序；`search-match.js` 负责匹配解释与原文高亮区间；`history-index/project.js` 负责用户名称投影；`search-state.js` 管理已提交条件和索引版本；`live-search.js` 管理输入防抖与输入法状态；`rename-session.js` 隔离异步弹窗会话。
-
-## Local Data
-
-The extension requests `activeTab`, `history`, `scripting`, `storage`, `tabs`, and `webNavigation` permissions. It does not upload or sync history. Pinned pages, custom page names, and the last search state are stored locally in `chrome.storage.local`; the rebuildable search index is stored locally in extension IndexedDB. A full history scan runs only when that index is missing or incompatible; normal history changes update it through browser events. `webNavigation` distinguishes committed redirects from canceled navigations. The `activeTab` and `scripting` permissions are used only to show the inline rename dialog on the current page.
-
-## 备份与恢复
-
-在弹窗点「筛选与排序」→「设置」（或在扩展管理页打开「扩展程序选项」），「导出…」会生成一份 JSON，包含页面重命名、自动采集标题、分组名和置顶顺序。「恢复…」选择备份文件后合并导入，保留当前已有名称与置顶顺序，并迁移旧版数据；重复导入不会增加重复记录。旧版备份仍可导入，缺少自动采集标题时使用有效的 Chrome 历史标题。原始浏览历史和搜索索引不包含在备份中。恢复后，页面仍需存在于 Chrome 历史记录里才能显示。
-
-未打包扩展的 ID 可能随加载目录变化；不同 ID 的本地数据彼此隔离。移动目录、删除或重新安装前先备份，普通升级在扩展管理页点击「重新加载」即可。此功能是手动备份，尚未导出的新增修改不会自动保存到文件。
-
-## Development
-
-开发验证需要 Node.js 20.19 及以上，建议使用仍受支持的 LTS 版本。先安装锁定的开发依赖，再执行检查：
+扩展使用原生 HTML、CSS 和 JavaScript，无运行时框架依赖。开发验证需要 Node.js 20.19 或更新版本，建议使用当前 LTS。
 
 ```bash
 npm ci
 npm run verify
 ```
 
-验证包括纯逻辑测试、Node 模拟 DOM 的页面交互测试和静态检查；`linkedom` 仅为开发测试依赖，扩展运行时不加载它。默认不启动真实浏览器验收。
+`verify` 包含单元测试、页面交互测试、语法及 Manifest 检查。修改后，在 Chrome 扩展管理页重新加载即可使用。
+
+欢迎通过 [Issues](https://github.com/0xb3i/chrome-history-dedupe/issues) 提交问题或建议。反馈问题时，请附上 Chrome 版本、扩展版本和复现步骤；提交代码前请运行 `npm run verify`。
+
+## 致谢
+
+小猫图标来自 Microsoft [Fluent Emoji](https://github.com/microsoft/fluentui-emoji)，沿用原始橙色设计，图标素材使用 [MIT 许可证](icons/LICENSE)。
