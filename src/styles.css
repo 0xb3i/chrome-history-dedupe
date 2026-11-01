@@ -2151,8 +2151,7 @@ input {
   margin: 8px 18px 0;
 }
 
-/* One row per page in fixed columns so every row lines up:
-   favicon | title (flexes) | source (fixed) | state slot | time.
+/* Title and trailing source share the flexible column; time and state align.
    The favicon lives in the source button but is drawn in the leading column. */
 .popup-body .popup-results {
   gap: 0;
@@ -2160,16 +2159,15 @@ input {
 }
 
 .popup-body .popup-results .result-item {
-  --source-column: 112px;
   --time-column: 54px;
   --state-column: 32px;
   position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--source-column) var(--time-column) var(--state-column);
+  grid-template-columns: minmax(0, 1fr) var(--time-column) var(--state-column);
   grid-template-areas:
-    "title source time state"
-    "match match match match"
-    "url url url url";
+    "title time state"
+    "match match match"
+    "url url url";
   align-items: center;
   column-gap: 8px;
   row-gap: 0;
@@ -2196,6 +2194,7 @@ input {
   grid-area: title;
   display: flex;
   align-items: center;
+  gap: 8px;
   min-width: 0;
   min-height: 26px;
 }
@@ -2236,19 +2235,33 @@ input {
   box-decoration-break: clone;
 }
 
-/* Source: its own column, always starting at the same x. */
+/* Shrink the title before the trailing source. An oversized source stays on
+   one line and can scroll without displacing the time or state columns. */
 .popup-body .popup-results .result-item .result-host {
-  grid-area: source;
-  justify-self: start;
+  flex: 0 0 auto;
   min-width: 0;
-  max-width: 100%;
-  margin: 0 0 0 4px;
+  max-width: calc(100% - 4em - 8px);
+  margin: 0;
   color: var(--pop-secondary);
   font-size: 12px;
   line-height: 20px;
+  text-align: left;
+  white-space: nowrap;
 }
 
-.popup-body .popup-results .result-host:hover {
+.popup-body .popup-results .result-host-label {
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+  scrollbar-width: none;
+}
+
+.popup-body .popup-results .result-host-label::-webkit-scrollbar {
+  display: none;
+}
+
+.popup-body .popup-results .result-item .result-host:hover {
   color: var(--pop-text);
 }
 

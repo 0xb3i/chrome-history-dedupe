@@ -449,7 +449,7 @@ test('the filter panel only holds result filters and a settings link', async () 
   assert.deepEqual(page.tabsCreated, ['chrome-extension://test-extension/options.html']);
 });
 
-test('popup rows have no inline buttons and lay out title, source, state and time columns', async () => {
+test('popup rows keep the source beside the title and state and time in separate columns', async () => {
   const renamed = pageItem('原来的名称', 'renamed');
   const page = await createPage({ items: [pageItem('甲文档', 'a'), renamed],
     titles: new Map([[renamed.dedupeKey, { title: '整理后的名称', targetUrl: renamed.url, updatedAt: now }]]) });
@@ -458,8 +458,9 @@ test('popup rows have no inline buttons and lay out title, source, state and tim
   const row = page.all('.popup-results .result-item').find((item) => item.textContent.includes('整理后的名称'));
   const columns = [...row.querySelector('.result-content').children].map((child) => child.className.split(' ')[0]);
   assert.deepEqual(columns.filter((name) => name !== 'result-url'),
-    ['result-title-row', 'result-host', 'result-state', 'result-meta']);
-  assert.equal(row.querySelector('.result-title-row').children.length, 1, 'title row holds only the title');
+    ['result-title-row', 'result-state', 'result-meta']);
+  assert.deepEqual([...row.querySelector('.result-title-row').children].map((child) => child.className.split(' ')[0]),
+    ['result-title', 'result-host']);
   assert.equal(row.querySelector('.result-state .result-custom-label').textContent, '已命名');
   assert.match(row.querySelector('.result-time').title, /1 次访问/);
   assert.equal(row.querySelector('.result-host').dataset.initial, 'E');
@@ -643,13 +644,21 @@ test('source icons use the extension favicon endpoint and fall back after image 
 test('source filtering preserves search conditions and clearing restores other sites', async () => {
   {
     const items = [pageItem('页面甲', 'a'), pageItem('页面乙', 'b', { url: 'https://other.example/b', dedupeKey: 'other' })];
-    const page = await createPage({ items, saved: { query: '页面', range: 'all' } });
-    page.one('.result-host').click();
+    const groupName = '项目资料与开发工具平台 / DocumentationAndDeveloperToolsForEveryTeam';
+    const page = await createPage({ items, saved: { query: '页面', range: 'all' },
+      groupNames: new Map([['example.com', groupName]]) });
+    const title = page.one('.result-title');
+    const host = title.nextElementSibling;
+    assert.ok(host.classList.contains('result-host'));
+    assert.equal(host.querySelector('.result-host-label').textContent, groupName);
+    assert.equal(host.getAttribute('aria-label'), `筛选来源：${groupName}`);
+    host.click();
     assert.deepEqual(page.all('.result-title').map((link) => link.href), [items[0].url]);
     assert.equal(page.one('#query').value, '页面');
     assert.equal(page.one('.source-filter-bar').hidden, false);
     assert.equal(page.one('.source-filter-caption').textContent, '来源：');
-    assert.equal(page.one('.source-filter-name').textContent, page.one('.result-host').textContent);
+    assert.equal(page.one('.source-filter-name').textContent, groupName);
+    assert.equal(page.one('.result-host-label').textContent, groupName);
     page.one('.source-filter-clear').click();
     assert.equal(page.all('.result-title').length, 2);
     assert.equal(page.one('.source-filter-bar').hidden, true);

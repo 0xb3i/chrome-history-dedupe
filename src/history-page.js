@@ -396,11 +396,11 @@ function initializePrimaryKeyHint() {
   for (const type of ['focusin', 'keyup', 'click']) document.addEventListener(type, sync);
 }
 
-// Launcher rows use fixed columns for title, source, time and independent
-// renamed/pinned indicators.
+// The source follows the title; time and renamed/pinned indicators stay in
+// independent columns.
 function arrangePopupRow(titleRow, meta, stateSlot) {
   const host = meta.querySelector('.result-host');
-  if (host) meta.before(host);
+  if (host) titleRow.append(host);
   const time = meta.querySelector('.result-time');
   for (const state of titleRow.querySelectorAll('.result-state-icons, .result-custom-label')) stateSlot.append(state);
   meta.before(stateSlot);
